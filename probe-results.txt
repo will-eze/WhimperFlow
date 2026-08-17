@@ -1,0 +1,9 @@
+speechprobe — trimmed.wav, locale en-GB, streaming (buffer) API
+capture engine running: true
+
+pad 0.0s · 24 callbacks · ok — "Quick one, do we need approval before I go ahead or can I just make a start?"
+pad 1.0s · 24 callbacks · ok — "Quick one, do we need approval before I go ahead or can I just make a start?"
+pad 1.5s · 24 callbacks · ok — "Quick one, do we need approval before I go ahead or can I just make a start?"
+pad 2.0s · 25 callbacks · LOST — final empty, but a partial had: "Quick one, do we need approval before I go ahead or can I just make a start?"
+
+The streaming path DOES drop utterances at some trailing-silence lengths.

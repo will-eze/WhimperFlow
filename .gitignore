@@ -1,0 +1,17 @@
+# macOS
+.DS_Store
+
+# Swift Package Manager / build output
+.build/
+*.xcodeproj
+*.xcworkspace
+Package.resolved
+
+# Built app bundles (produced by the Makefile)
+*.app/
+
+# Local code-signing identity (created by `make signing-identity`)
+.signing-identity
+
+# Eval harness — personal voice recordings, transcriptions, and result reports
+Eval/
