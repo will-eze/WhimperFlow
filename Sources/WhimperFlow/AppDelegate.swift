@@ -183,7 +183,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mainWindow.show(.settings)
     }
 
-    /// Clicking the Dock icon (shown while the window is open) brings it back.
+    /// Opening the app again (Finder, Spotlight, `open -a`) shows the window.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         mainWindow.show()
         return false

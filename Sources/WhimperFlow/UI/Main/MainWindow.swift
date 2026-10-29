@@ -103,8 +103,8 @@ struct MainRootView: View {
     }
 }
 
-/// Owns the window. While it is open WhimperFlow shows in the Dock and the
-/// app switcher like any other app; closing it returns to menu bar only.
+/// Owns the window. WhimperFlow stays a menu-bar app (no Dock icon) even
+/// while the window is open.
 @MainActor
 final class MainWindowController: NSObject, NSWindowDelegate {
     private let context: AppContext
@@ -138,13 +138,11 @@ final class MainWindowController: NSObject, NSWindowDelegate {
             if !window.setFrameUsingName("WhimperFlowMain") { window.center() }
             self.window = window
         }
-        NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
     }
 
     func windowWillClose(_ notification: Notification) {
         context.router.teaching = nil
-        NSApp.setActivationPolicy(.accessory)
     }
 }

@@ -180,8 +180,8 @@ first-run onboarding checklist.
 
 ## UI (redesigned 2026-10-29)
 
-Will's pain points were setup/permissions and teaching it words (PRODUCT.md). One window, shown in the Dock
-while open, replaces the separate Settings and History windows:
+Will's pain points were setup/permissions and teaching it words (PRODUCT.md). One window (menu-bar app only, never
+in the Dock: Will, 2026-10-29) replaces the separate Settings and History windows:
 
 - **Home**: status line (green Parakeet / amber Apple / red none, or "Almost ready"), a numbered setup
   checklist with one button per missing item (asked one at a time when clicked, never a burst at launch), a

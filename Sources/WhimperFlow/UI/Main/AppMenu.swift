@@ -1,8 +1,8 @@
 import AppKit
 
-/// The menu bar shown while the window is in front. Without it, ⌘C, ⌘V, ⌘A
-/// and ⌘Z do nothing in text fields (they travel through these items), and
-/// pasted dictation can't land in the window's own try-it box.
+/// Never shown (WhimperFlow has no Dock icon or menu bar of its own), but
+/// key equivalents still travel through it: without it ⌘C, ⌘V, ⌘A and ⌘Z do
+/// nothing in text fields, and pasted dictation can't land in the try-it box.
 @MainActor
 enum AppMenu {
     static func install(openWindow: Selector, target: AnyObject) {
