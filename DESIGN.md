@@ -203,6 +203,9 @@ in the Dock: Will, 2026-10-29) replaces the separate Settings and History window
   slow or failing leaves the chunk as heard. The pop-up shows "reaper → repo" for 1.8 s; History keeps the heard text.
   Terms start from `TermMiner.starter` + jargon mined from History. Eval (34 clips, chunked, over Tailscale):
   5.4 → 5.3% processed WER, raw 6.7 → 5.3%, no wrong changes; p90 wait after release 0.47 → 0.96 s.
+  Live with Will's 55 terms it swapped "margin" → README and "trunk" → repo, so the server also requires the two
+  to sound alike (same first sound, similar consonant skeleton): re-run 5.4% processed, raw 6.7 → 5.7%, no wrong
+  changes; model ~0.5–0.8 s per chunk, p90 wait after release 0.34 → 1.08 s live.
   `whimpereval --backend server --correct` measures it. Off switch: Settings → Engine.
 - **Spoken shortcuts** (`SpokenShortcuts`): "quote unquote X" / "quote on quote X" quote X to the next punctuation;
   "quote X unquote|end quote" quote X; 3+ single letters join (Parakeet already joins them itself).

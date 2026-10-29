@@ -129,11 +129,12 @@ struct HUDView: View {
             mark
             waveform
             trailing
-                .frame(minWidth: 124, alignment: .leading)
         }
         .padding(.leading, 16)
-        .padding(.trailing, 14)
+        .padding(.trailing, 18)
         .frame(height: 46)
+        .fixedSize()
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: model.state)
         .background(Self.ink.opacity(0.92), in: Capsule())
         .overlay(Capsule().strokeBorder(.white.opacity(0.1), lineWidth: 1))
         .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
