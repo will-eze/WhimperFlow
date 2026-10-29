@@ -48,6 +48,12 @@ struct HistoryRowView: View {
 
                 if isHovering {
                     HStack(spacing: 10) {
+                        if hasRawDiff {
+                            Button(showRaw ? "Hide What It Heard" : "What It Heard") {
+                                withAnimation(.easeInOut(duration: 0.15)) { showRaw.toggle() }
+                            }
+                            .controlSize(.small)
+                        }
                         Button("Fix a word…", action: onFix)
                             .controlSize(.small)
 
@@ -73,21 +79,6 @@ struct HistoryRowView: View {
             }
 
             if hasRawDiff {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        showRaw.toggle()
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: showRaw ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 9, weight: .semibold))
-                        Text("Raw transcript")
-                    }
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                }
-                .buttonStyle(.plain)
-
                 if showRaw {
                     Text(record.rawText)
                         .font(.caption.monospaced())

@@ -169,6 +169,16 @@ final class DictationController: ObservableObject {
         }
     }
 
+    /// ⌃⌥V: types the last dictation again at the cursor, for when it landed
+    /// in the wrong place. Leading space dropped; the cursor decides spacing.
+    func reinsertLast() {
+        guard state == .idle,
+              let text = (lastInjection?.text ?? historyStore.records.first?.processedText)?
+                .trimmingCharacters(in: .whitespaces),
+              !text.isEmpty else { return }
+        injector.inject(text, method: settingsStore.settings.injectionMethod)
+    }
+
     func toggleFromMenu() {
         switch state {
         case .idle, .error:

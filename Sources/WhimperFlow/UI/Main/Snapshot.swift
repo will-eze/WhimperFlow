@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import WhimperFlowKit
 
 /// `WhimperFlow --snapshot <dir> [--appearance dark|light]`: renders every
@@ -25,7 +26,10 @@ enum Snapshot {
         var names = MainSection.allCases.map(\.rawValue) + ["teach"]
 
         func next() {
-            guard !steps.isEmpty else { exit(0) }
+            guard !steps.isEmpty else {
+                renderHUD(to: directory)
+                exit(0)
+            }
             steps.removeFirst()()
             let name = names.removeFirst()
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
@@ -40,5 +44,38 @@ enum Snapshot {
             }
         }
         next()
+    }
+
+    /// The dictation pop-up in each state, drawn over a light and a dark strip
+    /// so its contrast shows against both.
+    private static func renderHUD(to directory: URL) {
+        let states: [(String, DictationState, Bool)] = [
+            ("hud-listening", .listening(handsFree: false), false),
+            ("hud-handsfree", .listening(handsFree: true), false),
+            ("hud-typing", .processing, false),
+            ("hud-fallback", .idle, true),
+        ]
+        for (name, state, fallback) in states {
+            let model = HUDModel()
+            model.state = state
+            model.usedFallback = fallback
+            model.levels = (0..<HUDModel.barCount).map { i in Float(0.15 + 0.75 * abs(sin(Double(i) * 0.55))) }
+            if fallback { model.engine = "Apple" }
+            let root = HStack(spacing: 0) {
+                ZStack { Color.white; HUDView(model: model) }
+                ZStack { Color(white: 0.12); HUDView(model: model) }
+            }
+            let host = NSHostingView(rootView: root.frame(width: 880, height: 110))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 880, height: 110),
+                                  styleMask: [.borderless], backing: .buffered, defer: false)
+            window.contentView = host
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.6))
+            if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                host.cacheDisplay(in: host.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?
+                    .write(to: directory.appendingPathComponent(name + ".png"))
+            }
+        }
     }
 }

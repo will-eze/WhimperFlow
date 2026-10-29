@@ -104,6 +104,9 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         if let last = historyStore.records.first {
             let preview = last.processedText.count > 48 ? String(last.processedText.prefix(47)) + "…" : last.processedText
             menu.addItem(disabled("Last: \u{201C}\(preview)\u{201D}"))
+            let paste = item("Type It Again", #selector(typeLast), key: "v")
+            paste.keyEquivalentModifierMask = [.control, .option]
+            menu.addItem(paste)
             menu.addItem(item("Copy Last Dictation", #selector(copyLast)))
             menu.addItem(item("Fix a Word in It…", #selector(fixLast)))
             menu.addItem(.separator())
@@ -145,6 +148,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         guard let last = historyStore.records.first else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(last.processedText, forType: .string)
+    }
+
+    @objc private func typeLast() {
+        // After the menu closes, so the text goes to the app underneath.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.controller.reinsertLast() }
     }
 
     @objc private func fixLast() {

@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var engineMonitor: EngineMonitor!
     private var statusBar: StatusBarController!
     private var hotkey: HotkeyMonitor!
+    private var pasteLast: PasteLastShortcut!
     private var hudModel: HUDModel!
     private var hudPanel: HUDPanel!
     private var mainWindow: MainWindowController!
@@ -70,6 +71,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkey.onKeyUp = { [weak self] in self?.controller.hotkeyUp() }
         hotkey.onEscape = { [weak self] in self?.controller.escapePressed() ?? false }
         startHotkeyWhenTrusted()
+        pasteLast = PasteLastShortcut { [weak self] in self?.controller.reinsertLast() }
 
         // Pause the global tap while the settings window records a new
         // hotkey, so the pressed key reaches the recorder instead of being
@@ -130,6 +132,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] state in
                 guard let self else { return }
+                if state.isListening, !self.hudModel.state.isListening {
+                    let server = self.settingsStore.settings.transcriptionEngine == .server
+                        && self.engineMonitor.status == .server
+                    self.hudModel.engine = server ? "Parakeet" : "Apple"
+                }
                 self.hudModel.state = state
                 guard self.settingsStore.settings.showHUD else { return }
                 switch state {

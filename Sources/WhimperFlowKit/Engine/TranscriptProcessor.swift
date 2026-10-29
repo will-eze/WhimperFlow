@@ -140,8 +140,10 @@ public struct TranscriptProcessor: Sendable {
             toks = FillerRemover.apply(to: toks, fillers: settings.fillerPhrases)
         }
         if settings.spokenPunctuationEnabled {
+            toks = SpokenShortcuts.quotes(toks)
             toks = SpokenPunctuation.apply(to: toks)
         }
+        toks = SpokenShortcuts.letters(toks)
         toks = DictionaryReplacer.apply(to: toks, entries: settings.dictionary)
         if settings.normalizeNumbers, identifierStyle == nil, mode != .code {
             toks = NumberNormalizer.apply(to: toks)
