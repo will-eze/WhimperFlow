@@ -177,5 +177,5 @@ app with Functions; 175 tests pass. Changes from the plan, all measured (RESULTS
   `whimpereval --backend server --verbose`; add whatever Parakeet hears for "flow" to `triggerVariants`. Pre-roll setting not added (finding 4: off is
   right; nothing asked for it).
 
-Will's root steps (once): install `jarvis-dictate@.service`, `sudo tailscale serve --bg --https=7443
-http://127.0.0.1:7030`, sudoers restart line. Until then the app shows amber and uses Apple.
+Live 2026-10-29: `jarvis-dictate@will` enabled, published on :7443, `sudo -n systemctl restart jarvis-dictate@will`
+works. Re-measured over Tailscale HTTPS: 5.4% processed WER, after release median 0.00 s, p90 0.35 s, max 0.69 s.
