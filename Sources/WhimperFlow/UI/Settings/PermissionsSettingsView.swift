@@ -13,7 +13,7 @@ struct PermissionsSettingsView: View {
     var body: some View {
         Form {
             Section {
-                Text("WhimperFlow needs three permissions to work: the microphone to capture audio, Speech Recognition to transcribe it fully on-device, and Accessibility to watch for your hotkey and type text into other apps.")
+                Text("Microphone and Accessibility are required. Speech Recognition is only for Apple's recogniser: the Apple engine, or the backup when the server can't be reached.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -36,7 +36,7 @@ struct PermissionsSettingsView: View {
                 row(
                     service: .speechRecognition,
                     status: permissions.speechRecognition,
-                    explanation: "Powers fully local, on-device transcription of your speech."
+                    explanation: "Lets Apple's recogniser on this Mac transcribe: the Apple engine, and the backup when the server is unreachable."
                 )
             }
 

@@ -101,10 +101,10 @@ final class EngineMonitor: ObservableObject {
     /// A one-line description for the menu.
     var summary: String {
         switch (settingsStore.settings.transcriptionEngine, status) {
-        case (.server, .server): return "Engine: Parakeet on \(client.baseURL.host ?? "server")"
-        case (.server, .fallbackOnly): return "Engine: server unreachable, using Apple on-device"
-        case (.apple, .fallbackOnly): return "Engine: Apple on-device"
-        default: return "Engine: none available (recordings are kept)"
+        case (.server, .server): return "Ready · Parakeet on \(client.baseURL.host?.components(separatedBy: ".").first ?? "server")"
+        case (.server, .fallbackOnly): return "Using Apple · server not answering"
+        case (.apple, .fallbackOnly): return "Ready · Apple, on this Mac"
+        default: return "Can't transcribe · recordings are kept"
         }
     }
 }

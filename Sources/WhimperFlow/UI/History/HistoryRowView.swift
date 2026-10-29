@@ -7,6 +7,7 @@ import WhimperFlowKit
 /// revealing the raw (pre-processing) transcript when it differs.
 struct HistoryRowView: View {
     let record: DictationRecord
+    let onFix: () -> Void
     let onDelete: () -> Void
 
     @State private var isHovering = false
@@ -47,6 +48,9 @@ struct HistoryRowView: View {
 
                 if isHovering {
                     HStack(spacing: 10) {
+                        Button("Fix a word…", action: onFix)
+                            .controlSize(.small)
+
                         Button {
                             copyToPasteboard()
                         } label: {
@@ -102,6 +106,12 @@ struct HistoryRowView: View {
         .contentShape(Rectangle())
         .onHover { hovering in
             isHovering = hovering
+        }
+        .contextMenu {
+            Button("Fix a Word…", action: onFix)
+            Button("Copy Text", action: copyToPasteboard)
+            Divider()
+            Button("Delete", role: .destructive, action: onDelete)
         }
     }
 

@@ -73,8 +73,8 @@ Two SwiftPM targets plus a test target. Kit is AppKit-free and 100% unit-testabl
 
 ```
 ┌────────────────────────────  WhimperFlow (executable, AppKit/SwiftUI)  ─────┐
-│ AppDelegate / StatusBarController      SettingsWindow (SwiftUI panes)      │
-│ HotkeyMonitor (CGEventTap)             HistoryWindow (SwiftUI)             │
+│ AppDelegate / StatusBarController      MainWindow: Home · History · Words · │
+│ HotkeyMonitor (CGEventTap)               Snippets · Style · Settings        │
 │ AudioCaptureEngine (AVAudioEngine)     HUDPanel (floating NSPanel)         │
 │ ChunkedDictation → Server/AppleBackend EngineMonitor (menu-bar dot)        │
 │ SpeechService (Apple-only, streaming)  PermissionsManager                  │
@@ -177,3 +177,20 @@ first-run onboarding checklist.
 - `make test` → unit tests. `make run` → build & launch.
 - `WhimperFlow.app/Contents/MacOS/WhimperFlow --selftest <clip> [--server <url>]` plays
   a recording through the real server/fallback path and prints the result.
+
+## UI (redesigned 2026-10-29)
+
+Will's pain points were setup/permissions and teaching it words (PRODUCT.md). One window, shown in the Dock
+while open, replaces the separate Settings and History windows:
+
+- **Home**: status line (green Parakeet / amber Apple / red none, or "Almost ready"), a numbered setup
+  checklist with one button per missing item (asked one at a time when clicked, never a burst at launch), a
+  try-it box, the last six dictations with Copy and **Fix a word…**, and a 7-day words line.
+- **Fix a word** (`TeachWordSheet`): click the misheard words in the dictation, type the spelling, see the
+  sentence re-run through `TranscriptProcessor` before saving (`FlowSettings.teach`, which updates an entry
+  with the same pattern instead of duplicating). Also from History rows and the menu bar ("Fix a Word in It…").
+- **Words**: one-line add, search, inline edit, exact-case in the context menu, import/export in the toolbar.
+- **Snippets**: list + editor. **Style**: default style, cleanup, per-app, voice functions.
+  **Settings**: General / Engine / Permissions / About.
+- The app now installs a main menu (Edit menu), without which ⌘C/⌘V/⌘A never worked in its text fields.
+- `WhimperFlow --snapshot <dir> [--appearance dark|light]` renders every page to PNG for layout checks.

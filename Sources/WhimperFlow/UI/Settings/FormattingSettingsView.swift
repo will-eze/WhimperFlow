@@ -8,6 +8,15 @@ struct FormattingSettingsView: View {
 
     var body: some View {
         Form {
+            Section {
+                Picker("Style", selection: $settingsStore.settings.defaultMode) {
+                    ForEach(FormattingMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                caption("Used everywhere except the apps listed under Per App.")
+            }
+
             Section("Cleanup") {
                 Toggle("Remove filler words", isOn: $settingsStore.settings.removeFillers)
                 caption("Strips words like \u{201C}um\u{201D}, \u{201C}uh\u{201D}, and \u{201C}you know\u{201D} from the transcript.")
@@ -25,7 +34,7 @@ struct FormattingSettingsView: View {
                 caption("Converts spoken numbers like \u{201C}twenty three\u{201D} into \u{201C}23\u{201D}.")
             }
 
-            Section("Filler phrases") {
+            Section("Filler words to remove") {
                 List {
                     ForEach(settingsStore.settings.fillerPhrases, id: \.self) { phrase in
                         HStack {
@@ -46,7 +55,7 @@ struct FormattingSettingsView: View {
                 .frame(minHeight: 120, maxHeight: 180)
 
                 HStack {
-                    TextField("Add filler phrase", text: $newFiller)
+                    TextField("Add a filler word", text: $newFiller)
                         .onSubmit(addFiller)
                     Button {
                         addFiller()
@@ -56,7 +65,7 @@ struct FormattingSettingsView: View {
                     .disabled(newFiller.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
 
-                Button("Restore default fillers") {
+                Button("Restore Defaults") {
                     settingsStore.settings.fillerPhrases = FlowSettings.defaultFillers
                 }
             }

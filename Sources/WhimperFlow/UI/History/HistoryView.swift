@@ -7,13 +7,15 @@ import WhimperFlowKit
 struct HistoryView: View {
     @ObservedObject var historyStore: HistoryStore
     @ObservedObject var settingsStore: SettingsStore
+    let router: MainRouter
 
     @State private var searchQuery: String = ""
     @State private var isConfirmingClear = false
 
-    init(historyStore: HistoryStore, settingsStore: SettingsStore) {
+    init(historyStore: HistoryStore, settingsStore: SettingsStore, router: MainRouter) {
         self.historyStore = historyStore
         self.settingsStore = settingsStore
+        self.router = router
     }
 
     private var stats: DictationStats {
@@ -45,7 +47,6 @@ struct HistoryView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
         }
-        .frame(minWidth: 640, minHeight: 560)
     }
 
     @ViewBuilder
@@ -57,7 +58,7 @@ struct HistoryView: View {
         } else {
             List {
                 ForEach(filteredRecords) { record in
-                    HistoryRowView(record: record) {
+                    HistoryRowView(record: record, onFix: { router.teaching = record }) {
                         historyStore.delete(id: record.id)
                     }
                     .listRowSeparator(.visible)
@@ -132,7 +133,7 @@ struct HistoryView: View {
             Image(systemName: "mic")
                 .font(.system(size: 40, weight: .regular))
                 .foregroundStyle(.secondary)
-            Text("No dictations yet \u{2014} hold your hotkey and speak.")
+            Text("No dictations yet. Hold \(settingsStore.settings.hotkeyDisplayName) and speak.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

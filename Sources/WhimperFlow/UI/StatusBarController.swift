@@ -13,11 +13,17 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private let dot = NSView(frame: NSRect(x: 0, y: 0, width: 7, height: 7))
     private var cancellables: Set<AnyCancellable> = []
 
-    var openSettings: (() -> Void)?
-    var openHistory: (() -> Void)?
+    private let historyStore: HistoryStore
+    private let permissions: PermissionsManager
 
-    init(controller: DictationController, settingsStore: SettingsStore, engineMonitor: EngineMonitor) {
+    var open: ((MainSection) -> Void)?
+    var teach: ((DictationRecord) -> Void)?
+
+    init(controller: DictationController, settingsStore: SettingsStore, engineMonitor: EngineMonitor,
+         historyStore: HistoryStore, permissions: PermissionsManager) {
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        self.historyStore = historyStore
+        self.permissions = permissions
         self.controller = controller
         self.settingsStore = settingsStore
         self.engineMonitor = engineMonitor
@@ -85,57 +91,74 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         engineMonitor.check()
         let settings = settingsStore.settings
 
-        let stateItem = NSMenuItem(title: stateDescription, action: nil, keyEquivalent: "")
-        stateItem.isEnabled = false
-        menu.addItem(stateItem)
-        let engineItem = NSMenuItem(title: engineMonitor.summary, action: nil, keyEquivalent: "")
-        engineItem.isEnabled = false
-        menu.addItem(engineItem)
+        menu.addItem(disabled(controller.state.isListening ? stateDescription : engineMonitor.summary))
+        let pending = SetupStep.pending(permissions: permissions, engineMonitor: engineMonitor, settings: settings)
+        if !pending.isEmpty {
+            menu.addItem(item(pending.count == 1 ? "Finish Setup (1 step)…" : "Finish Setup (\(pending.count) steps)…",
+                              #selector(showHome)))
+        } else {
+            menu.addItem(disabled("Hold \(settings.hotkeyDisplayName) to talk"))
+        }
         menu.addItem(.separator())
 
-        let toggleTitle = controller.state.isListening
-            ? "Stop Dictation"
-            : "Start Hands-Free Dictation"
-        let toggle = NSMenuItem(title: toggleTitle, action: #selector(toggleDictation), keyEquivalent: "")
-        toggle.target = self
-        menu.addItem(toggle)
+        if let last = historyStore.records.first {
+            let preview = last.processedText.count > 48 ? String(last.processedText.prefix(47)) + "…" : last.processedText
+            menu.addItem(disabled("Last: \u{201C}\(preview)\u{201D}"))
+            menu.addItem(item("Copy Last Dictation", #selector(copyLast)))
+            menu.addItem(item("Fix a Word in It…", #selector(fixLast)))
+            menu.addItem(.separator())
+        }
 
-        let hint = NSMenuItem(title: "Hold \(settings.hotkeyDisplayName) to talk", action: nil, keyEquivalent: "")
-        hint.isEnabled = false
-        menu.addItem(hint)
+        menu.addItem(item(controller.state.isListening ? "Stop Dictation" : "Start Hands-Free Dictation",
+                          #selector(toggleDictation)))
         menu.addItem(.separator())
-
-        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
-        settingsItem.target = self
-        menu.addItem(settingsItem)
-
-        let historyItem = NSMenuItem(title: "History & Stats…", action: #selector(showHistory), keyEquivalent: "h")
-        historyItem.target = self
-        menu.addItem(historyItem)
+        menu.addItem(item("Open WhimperFlow", #selector(showHome), key: "o"))
+        menu.addItem(item("History", #selector(showHistory), key: "y"))
+        menu.addItem(item("Words", #selector(showWords)))
+        menu.addItem(item("Settings…", #selector(showSettings), key: ","))
         menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Quit WhimperFlow", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+    }
 
-        let quit = NSMenuItem(title: "Quit WhimperFlow", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        menu.addItem(quit)
+    private func item(_ title: String, _ action: Selector, key: String = "") -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+        item.target = self
+        return item
+    }
+
+    private func disabled(_ title: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        return item
     }
 
     private var stateDescription: String {
         switch controller.state {
-        case .idle: return "WhimperFlow — ready"
-        case .listening(let handsFree): return handsFree ? "Listening (hands-free)…" : "Listening…"
-        case .processing: return "Processing…"
-        case .error(let message): return "Error: \(message)"
+        case .idle: return "Ready"
+        case .listening(let handsFree): return handsFree ? "Listening hands-free…" : "Listening…"
+        case .processing: return "Typing…"
+        case .error(let message): return message
         }
     }
+
+    @objc private func copyLast() {
+        guard let last = historyStore.records.first else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(last.processedText, forType: .string)
+    }
+
+    @objc private func fixLast() {
+        guard let last = historyStore.records.first else { return }
+        teach?(last)
+    }
+
+    @objc private func showHome() { open?(.home) }
+    @objc private func showHistory() { open?(.history) }
+    @objc private func showWords() { open?(.words) }
+    @objc private func showSettings() { open?(.settings) }
 
     @objc private func toggleDictation() {
         controller.toggleFromMenu()
     }
 
-    @objc private func showSettings() {
-        openSettings?()
-    }
-
-    @objc private func showHistory() {
-        openHistory?()
-    }
 }

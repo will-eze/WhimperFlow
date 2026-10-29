@@ -15,8 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotkey: HotkeyMonitor!
     private var hudModel: HUDModel!
     private var hudPanel: HUDPanel!
-    private var settingsWindow: NSWindow?
-    private var historyWindow: NSWindow?
+    private var mainWindow: MainWindowController!
     private var cancellables: Set<AnyCancellable> = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -46,9 +45,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hudPanel = HUDPanel(model: hudModel)
         wireHUD()
 
-        statusBar = StatusBarController(controller: controller, settingsStore: settingsStore, engineMonitor: engineMonitor)
-        statusBar.openSettings = { [weak self] in self?.showSettings() }
-        statusBar.openHistory = { [weak self] in self?.showHistory() }
+        let router = MainRouter()
+        mainWindow = MainWindowController(context: AppContext(
+            settingsStore: settingsStore,
+            historyStore: historyStore,
+            permissions: permissions,
+            engineMonitor: engineMonitor,
+            controller: controller,
+            router: router
+        ))
+        AppMenu.install(openWindow: #selector(openSettingsFromMenu), target: self)
+
+        statusBar = StatusBarController(controller: controller, settingsStore: settingsStore, engineMonitor: engineMonitor,
+                                        historyStore: historyStore, permissions: permissions)
+        statusBar.open = { [weak self] section in self?.mainWindow.show(section) }
+        statusBar.teach = { [weak self] record in
+            self?.mainWindow.show()
+            router.teaching = record
+        }
 
         hotkey = HotkeyMonitor()
         hotkey.setHotkey(settingsStore.settings.hotkey, customKeyCode: settingsStore.settings.customKeyCode)
@@ -83,13 +97,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
-        // First run (or missing permissions): open onboarding via Settings.
-        // Prompts go up one at a time; TCC silently drops a request raised
-        // while another dialog is already on screen, which used to leave the
-        // app looking like it had never asked for Accessibility at all.
-        if !permissions.allGranted {
-            showSettings()
-            permissions.requestMissing()
+        if let directory = Snapshot.directory {
+            hotkey.stop()
+            Snapshot.run(window: mainWindow, router: router, history: historyStore, to: directory)
+            return
+        }
+
+        // Something still to set up: open Home, whose checklist asks for one
+        // permission at a time when the user clicks, instead of a burst of
+        // system prompts at launch.
+        if !SetupStep.pending(permissions: permissions, engineMonitor: engineMonitor, settings: settingsStore.settings).isEmpty {
+            mainWindow.show(.home)
         }
     }
 
@@ -159,52 +177,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: - Windows
+    // MARK: - Window
 
-    func showSettings() {
-        permissions.refresh()
-        if settingsWindow == nil {
-            let root = SettingsRootView(
-                settingsStore: settingsStore,
-                permissions: permissions,
-                engineMonitor: engineMonitor
-            )
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 820, height: 580),
-                styleMask: [.titled, .closable, .miniaturizable, .resizable],
-                backing: .buffered,
-                defer: false
-            )
-            window.title = "WhimperFlow Settings"
-            window.contentMinSize = NSSize(width: 720, height: 480)
-            window.contentView = NSHostingView(rootView: root)
-            window.isReleasedWhenClosed = false
-            window.center()
-            settingsWindow = window
-        }
-        NSApp.activate(ignoringOtherApps: true)
-        settingsWindow?.makeKeyAndOrderFront(nil)
+    @objc private func openSettingsFromMenu() {
+        mainWindow.show(.settings)
     }
 
-    func showHistory() {
-        if historyWindow == nil {
-            let root = HistoryView(
-                historyStore: historyStore,
-                settingsStore: settingsStore
-            )
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 640, height: 560),
-                styleMask: [.titled, .closable, .miniaturizable, .resizable],
-                backing: .buffered,
-                defer: false
-            )
-            window.title = "History & Stats"
-            window.contentView = NSHostingView(rootView: root)
-            window.isReleasedWhenClosed = false
-            window.center()
-            historyWindow = window
-        }
-        NSApp.activate(ignoringOtherApps: true)
-        historyWindow?.makeKeyAndOrderFront(nil)
+    /// Clicking the Dock icon (shown while the window is open) brings it back.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        mainWindow.show()
+        return false
     }
 }
