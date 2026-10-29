@@ -58,9 +58,10 @@ Two SwiftPM targets plus a test target. Kit is AppKit-free and 100% unit-testabl
 ┌──────────────────────────────────▼──────────  WhimperFlowKit (pure logic) ─┐
 │ FlowSettings (Codable) + SettingsStore (JSON persistence, observable)     │
 │ TranscriptProcessor pipeline:                                             │
-│   Tokenizer → CommandInterpreter → FillerRemover → SpokenPunctuation      │
-│   → DictionaryReplacer → SnippetExpander → NumberNormalizer               │
-│   → CaseFormatter (normal/casual/code modes) → Joiner (smart spacing)     │
+│   Tokenizer → FunctionSegmenter (inline voice-function spans) → per       │
+│   segment: FillerRemover → SpokenPunctuation → DictionaryReplacer →       │
+│   SnippetExpander → NumberNormalizer → CaseFormatter (normal/casual/code) │
+│   → Joiner (smart spacing)                                                │
 │ AppProfiles (bundle-id → formatting mode)                                 │
 │ HistoryStore (JSONL) + DictationStats                                     │
 └───────────────────────────────────────────────────────────────────────────┘
@@ -89,6 +90,7 @@ Two SwiftPM targets plus a test target. Kit is AppKit-free and 100% unit-testabl
 | Stage | Behavior |
 |---|---|
 | CommandInterpreter | Whole-utterance commands: "scratch that", "undo that", "new line", "new paragraph" as standalone phrases → edit ops, not text. |
+| FunctionSegmenter | Inline **voice functions**: `flow spell/quote/literal/code/caps/symbols … flow stop` open a span that transcribes the enclosed speech differently (join letters, wrap in quotes, verbatim, force code/caps, operator soup). The trigger word (`flow`, configurable) is only special immediately before a function name, so it stays usable as ordinary text; doubling it escapes to the literal word; a span auto-closes at the end of the utterance. The close is `stop` (the recognizer mis-hears "end" as "and", which stays usable as content). Splits the token stream into per-segment sub-pipelines. |
 | FillerRemover | Removes configurable fillers (`um`, `uh`, `erm`, `you know`…) with word-boundary matching; never inside quoted/literal mode. |
 | SpokenPunctuation | "comma" → `,`, "period"/"full stop" → `.`, "new line", "open quote", "ellipsis", "at sign", 40+ mappings; only when enabled. |
 | DictionaryReplacer | User pairs (`jira` → `Jira`, `k eight s` → `k8s`), longest-match-first, optional case-sensitivity. |
@@ -122,7 +124,8 @@ bundle id `com.whimperflow.app`.
 Beyond the Wispr Flow core: toggle (hands-free) mode with auto-stop on silence,
 Esc-to-cancel, live partial transcript in the HUD, per-app enable/disable and
 formatting profiles, code mode for editors/terminals, spoken-punctuation engine,
-number/currency normalization, "scratch that", snippet library, dictionary
+number/currency normalization, inline voice functions (spell/quote/literal/
+code/caps/symbols spans), "scratch that", snippet library, dictionary
 import/export, dictation history with search + copy + stats (words, WPM, estimated
 time saved vs 45 WPM typing), sound cues, mic device picker, on-device locale picker
 showing which languages support offline recognition, launch-at-login, and a

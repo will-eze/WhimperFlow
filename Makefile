@@ -17,7 +17,7 @@ SIGNING_IDENTITY_NAME := WhimperFlow Dev
 SIGNING_IDENTITY_FILE := .signing-identity
 CODESIGN_IDENTITY ?= $(shell cat $(SIGNING_IDENTITY_FILE) 2>/dev/null || echo -)
 
-.PHONY: build test app run eval eval-bundle eval-cli recorder record probe clean signing-identity
+.PHONY: build test app install run eval eval-bundle eval-cli recorder record probe clean signing-identity
 
 build:
 	swift build -c release
@@ -125,7 +125,17 @@ app: build
 	cp Resources/Info.plist $(APP_BUNDLE)/Contents/Info.plist
 	cp Resources/AppIcon.icns $(APP_BUNDLE)/Contents/Resources/AppIcon.icns
 	codesign --force --sign "$(CODESIGN_IDENTITY)" $(APP_BUNDLE)
-	@echo "Built $(APP_BUNDLE) — move it to /Applications if you like, then open it."
+	@echo "Built $(APP_BUNDLE) — run 'make install' to replace the copy in /Applications."
+
+# Replace the /Applications copy with a freshly built bundle, so the app the
+# user launches (Spotlight/Dock) is always the latest build. Quits a running
+# instance first so the bundle swaps cleanly; relaunch it yourself afterwards.
+# Signature is unchanged (cert-backed "WhimperFlow Dev"), so TCC grants survive.
+install: app
+	@osascript -e 'quit app "$(APP_NAME)"' >/dev/null 2>&1 || killall $(APP_NAME) >/dev/null 2>&1 || true
+	rm -rf /Applications/$(APP_BUNDLE)
+	cp -R $(APP_BUNDLE) /Applications/$(APP_BUNDLE)
+	@echo "Installed $(APP_BUNDLE) to /Applications — launch from Spotlight or: open -a $(APP_NAME)"
 
 run: app
 	open $(APP_BUNDLE)

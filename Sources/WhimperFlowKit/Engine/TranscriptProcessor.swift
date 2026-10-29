@@ -51,64 +51,108 @@ public struct TranscriptProcessor: Sendable {
             return ProcessedResult(text: (lead.needsSpace ? " " : "") + snippet.expansion)
         }
 
-        // 3. Literal mode: verbatim recognizer output.
-        if context.mode == .literal {
+        let tokens = Tokenizer.tokenize(trimmed)
+
+        // 3. Split into inline function spans. Disabled or trigger-less → one
+        // normal segment, so the ordinary pipeline below is byte-identical.
+        let triggers = settings.voiceFunctionsEnabled
+            ? VoiceFunction.triggerPhrases(for: settings.functionTriggerText)
+            : []
+        let segments = triggers.isEmpty
+            ? [FunctionSegment(kind: .normal, tokens: tokens)]
+            : FunctionSegmenter.segment(tokens, triggers: triggers)
+        let hasFunctionSpan = segments.contains { $0.kind != .normal }
+
+        // 4. Literal mode with no function spans keeps the whole-utterance
+        // verbatim contract exactly (including spacing the tokenizer would peel).
+        if context.mode == .literal, !hasFunctionSpan {
             let lead = Joiner.leadIn(for: context.precedingText)
             return ProcessedResult(text: (lead.needsSpace ? " " : "") + trimmed)
         }
 
-        var tokens = Tokenizer.tokenize(trimmed)
-
-        // 4. Code mode identifier operators ("snake case foo bar" → foo_bar).
-        var identifierStyle: IdentifierStyle?
-        if context.mode == .code, let op = CaseFormatter.detectOperator(in: tokens) {
-            identifierStyle = op.style
-            tokens.removeFirst(op.wordCount)
+        // 5. Process each segment into a token stream and concatenate.
+        var out: [Token] = []
+        for segment in segments {
+            out.append(contentsOf: processSegment(segment, mode: context.mode))
         }
 
-        // 5. Fillers.
-        if settings.removeFillers {
-            tokens = FillerRemover.apply(to: tokens, fillers: settings.fillerPhrases)
+        // 6. Terminal period: normal prose only, when the final span is normal,
+        // ≥2 words, and the last token is a word (never after a bare symbol,
+        // spelled term, path, or quote).
+        let lastKind = segments.last?.kind ?? .normal
+        let wordCount = out.reduce(into: 0) { count, t in if t.isWordLike { count += 1 } }
+        if context.mode == .normal, settings.autoPunctuate, lastKind == .normal, wordCount >= 2,
+           let last = out.last, last.isWordLike, lastTokenTakesPeriod(last) {
+            out.append(.punct("."))
         }
 
-        // 6. Spoken punctuation & structure.
-        if settings.spokenPunctuationEnabled {
-            tokens = SpokenPunctuation.apply(to: tokens)
-        }
-
-        // 7. User dictionary.
-        tokens = DictionaryReplacer.apply(to: tokens, entries: settings.dictionary)
-
-        // 8. Numbers (prose modes only — code identifiers keep words).
-        if settings.normalizeNumbers, identifierStyle == nil, context.mode != .code {
-            tokens = NumberNormalizer.apply(to: tokens)
-        }
-
-        // 9. Pronoun "i" in prose modes.
-        if context.mode == .normal || context.mode == .casual {
-            tokens = CaseFormatter.fixPronounI(tokens)
-        }
-
-        // 10. Identifier transform collapses everything into one verbatim token.
-        if let style = identifierStyle {
-            tokens = [CaseFormatter.transform(tokens, style: style)]
-        }
-
-        // 11. Terminal period (normal prose only, ≥2 words, never after a
-        // bare symbol/emoji token).
-        let wordCount = tokens.reduce(into: 0) { count, t in if t.isWordLike { count += 1 } }
-        if context.mode == .normal, settings.autoPunctuate, wordCount >= 2,
-           let last = tokens.last, last.isWordLike, lastTokenTakesPeriod(last) {
-            tokens.append(.punct("."))
-        }
-
-        // 12. Render with smart spacing.
+        // 7. Render with smart spacing.
         let capitalize = context.mode == .normal && settings.autoCapitalize
-        let text = Joiner.render(tokens, options: .init(
+        let text = Joiner.render(out, options: .init(
             capitalizeSentences: capitalize,
             precedingText: context.precedingText
         ))
         return ProcessedResult(text: text)
+    }
+
+    /// Turns one segment into its processed token stream.
+    private func processSegment(_ segment: FunctionSegment, mode: FormattingMode) -> [Token] {
+        switch segment.kind {
+        case .normal:
+            return processProse(segment.tokens, mode: mode)
+        case .code:
+            return processProse(segment.tokens, mode: .code)
+        case .spell(let caps):
+            return FunctionFormatters.spell(segment.tokens, caps: caps)
+        case .caps:
+            return FunctionFormatters.caps(segment.tokens)
+        case .literal:
+            return FunctionFormatters.literal(segment.tokens)
+        case .symbols:
+            return FunctionFormatters.symbols(segment.tokens)
+        case .quote:
+            // Quote wraps prose; a verbatim (literal-mode) ambient still reads
+            // its inner text as ordinary words.
+            var inner = processProse(segment.tokens, mode: mode == .literal ? .normal : mode)
+            inner.insert(.open("\""), at: 0)
+            inner.append(.punct("\""))
+            return inner
+        }
+    }
+
+    /// The ordinary prose/code pipeline for a normal (or code-function) segment.
+    /// Identical stage order to the pre-functions processor; the terminal period
+    /// and final render are applied once at the utterance level.
+    private func processProse(_ tokens: [Token], mode: FormattingMode) -> [Token] {
+        if mode == .literal {
+            return FunctionFormatters.literal(tokens)
+        }
+        var toks = tokens
+
+        // Code mode identifier operators ("snake case foo bar" → foo_bar).
+        var identifierStyle: IdentifierStyle?
+        if mode == .code, let op = CaseFormatter.detectOperator(in: toks) {
+            identifierStyle = op.style
+            toks.removeFirst(op.wordCount)
+        }
+
+        if settings.removeFillers {
+            toks = FillerRemover.apply(to: toks, fillers: settings.fillerPhrases)
+        }
+        if settings.spokenPunctuationEnabled {
+            toks = SpokenPunctuation.apply(to: toks)
+        }
+        toks = DictionaryReplacer.apply(to: toks, entries: settings.dictionary)
+        if settings.normalizeNumbers, identifierStyle == nil, mode != .code {
+            toks = NumberNormalizer.apply(to: toks)
+        }
+        if mode == .normal || mode == .casual {
+            toks = CaseFormatter.fixPronounI(toks)
+        }
+        if let style = identifierStyle {
+            toks = [CaseFormatter.transform(toks, style: style)]
+        }
+        return toks
     }
 
     /// Periods follow words, not bare symbols or emoji ("sounds good 🙂").

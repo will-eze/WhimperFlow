@@ -185,6 +185,12 @@ public struct FlowSettings: Codable, Equatable, Sendable {
     public var autoPunctuate: Bool
     public var autoCapitalize: Bool
     public var normalizeNumbers: Bool
+    /// Inline voice functions (`flow spell …`, `flow quote …`, etc.). Optional so
+    /// settings saved by older versions still decode; nil means enabled.
+    public var voiceFunctions: Bool?
+    /// The word that opens a voice function (only "hot" before a function name).
+    /// Optional for back-compat; nil/empty falls back to "flow".
+    public var functionTrigger: String?
 
     // Personalization
     public var dictionary: [DictionaryEntry]
@@ -217,6 +223,8 @@ public struct FlowSettings: Codable, Equatable, Sendable {
         autoPunctuate = true
         autoCapitalize = true
         normalizeNumbers = true
+        voiceFunctions = true
+        functionTrigger = "flow"
         dictionary = []
         snippets = []
         appProfiles = []
@@ -235,6 +243,16 @@ public struct FlowSettings: Codable, Equatable, Sendable {
     /// `SFSpeechRecognitionRequest.contextualStrings` (Apple caps usefulness ~100).
     public func contextualStrings(limit: Int = 100) -> [String] {
         var phrases: [String] = []
+        // Bias the recognizer toward the function trigger + names so spans open
+        // reliably ("flow spell", "flow quote", …, "flow stop").
+        if voiceFunctionsEnabled {
+            let trigger = functionTriggerText
+            phrases.append(trigger)
+            phrases.append("\(trigger) \(VoiceFunction.endWord)")
+            for function in VoiceFunction.allCases {
+                phrases.append("\(trigger) \(function.canonicalName)")
+            }
+        }
         for entry in dictionary {
             phrases.append(entry.replacement)
             if entry.pattern.caseInsensitiveCompare(entry.replacement) != .orderedSame {
@@ -257,6 +275,22 @@ public struct FlowSettings: Codable, Equatable, Sendable {
     public var voiceProcessingEnabled: Bool {
         get { voiceProcessing ?? false }
         set { voiceProcessing = newValue }
+    }
+
+    /// Effective voice-functions state (`nil` decodes as enabled).
+    public var voiceFunctionsEnabled: Bool {
+        get { voiceFunctions ?? true }
+        set { voiceFunctions = newValue }
+    }
+
+    /// The effective function trigger word, defaulting to "flow" when unset or
+    /// blank (turn the feature off with `voiceFunctionsEnabled`, not by clearing this).
+    public var functionTriggerText: String {
+        get {
+            let t = (functionTrigger ?? "flow").trimmingCharacters(in: .whitespacesAndNewlines)
+            return t.isEmpty ? "flow" : t
+        }
+        set { functionTrigger = newValue }
     }
 
     /// The hotkey name to show in menus/UI, resolving `.custom` to the

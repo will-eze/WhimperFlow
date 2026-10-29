@@ -148,12 +148,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 permissions: permissions
             )
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 700, height: 520),
-                styleMask: [.titled, .closable, .miniaturizable],
+                contentRect: NSRect(x: 0, y: 0, width: 820, height: 580),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable],
                 backing: .buffered,
                 defer: false
             )
             window.title = "WhimperFlow Settings"
+            window.contentMinSize = NSSize(width: 720, height: 480)
             window.contentView = NSHostingView(rootView: root)
             window.isReleasedWhenClosed = false
             window.center()
