@@ -85,6 +85,17 @@ struct EngineSettingsView: View {
             }
 
             if settingsStore.settings.transcriptionEngine == .server {
+                Section("Fix misheard words") {
+                    Toggle(isOn: $settingsStore.settings.fixMishearsEnabled) {
+                        Text("Fix misheard jargon with a small AI model on Jarvis")
+                        Text("It turns “public reaper” into “public repo”. It may only swap a few words for one of your terms (Words → Terms you use), so it can't reword anything else. Adds about half a second after you let go.")
+                    }
+                    if settingsStore.settings.fixMishearsEnabled {
+                        LabeledContent("Status") {
+                            Text(fixerStatus).foregroundStyle(.secondary)
+                        }
+                    }
+                }
                 Section("Server") {
                     TextField("Address", text: $serverURLText, prompt: Text(FlowSettings.defaultServerURL))
                         .onSubmit(commitServerURL)
@@ -103,6 +114,13 @@ struct EngineSettingsView: View {
         .formStyle(.grouped)
         .onAppear { serverURLText = settingsStore.settings.serverURL ?? "" }
         .onDisappear(perform: commitServerURL)
+    }
+
+    private var fixerStatus: String {
+        if !engineMonitor.serverReachable { return "Server unreachable" }
+        if !engineMonitor.serverCorrector { return "Not running on the server" }
+        let count = settingsStore.settings.correctionVocabulary.count
+        return "Running · \(count) terms"
     }
 
     private var engineCaption: String {

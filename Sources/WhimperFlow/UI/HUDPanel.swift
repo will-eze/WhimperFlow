@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Combine
+import WhimperFlowKit
 
 /// Observable model driving the floating HUD: state, waveform, live transcript.
 @MainActor
@@ -16,6 +17,8 @@ final class HUDModel: ObservableObject {
     @Published var usedFallback = false
     /// The engine this dictation starts on ("Parakeet" or "Apple").
     @Published var engine = "Parakeet"
+    /// Misheard words the server fixed in this dictation, shown as it finishes.
+    @Published var fixes: [DictationServerClient.Fix] = []
     @Published private(set) var startedAt = Date()
 
     static let barCount = 27
@@ -29,6 +32,7 @@ final class HUDModel: ObservableObject {
         levels = Array(repeating: 0, count: HUDModel.barCount)
         partialText = ""
         usedFallback = false
+        fixes = []
     }
 }
 
@@ -191,8 +195,13 @@ struct HUDView: View {
                         .font(.system(size: 13, weight: .medium).monospacedDigit())
                         .foregroundStyle(.white)
                 }
-                tag(handsFree ? "Hands-free" : model.engine,
-                    color: model.engine == "Apple" && !handsFree ? .orange : .white.opacity(0.6))
+                // Parakeet is the normal case, so it goes unlabelled; only
+                // hands-free and the Apple fallback get a tag.
+                if handsFree {
+                    tag("Hands-free", color: .white.opacity(0.6))
+                } else if model.engine == "Apple" {
+                    tag("Apple", color: .orange)
+                }
             }
         case .processing:
             Text("Typing…").font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.8))
@@ -206,6 +215,18 @@ struct HUDView: View {
             if model.usedFallback {
                 tag("Typed by Apple", color: .orange)
                     .help("The server didn't answer, so Apple's on-device recogniser typed this.")
+            } else if let fix = model.fixes.first {
+                HStack(spacing: 5) {
+                    Text(fix.heard).strikethrough().foregroundStyle(.white.opacity(0.5))
+                    Image(systemName: "arrow.right").font(.system(size: 9, weight: .bold)).foregroundStyle(.white.opacity(0.5))
+                    Text(fix.written).foregroundStyle(.white)
+                    if model.fixes.count > 1 {
+                        Text("+\(model.fixes.count - 1)").foregroundStyle(.white.opacity(0.6))
+                    }
+                }
+                .font(.system(size: 12, weight: .medium))
+                .lineLimit(1)
+                .frame(maxWidth: 190, alignment: .leading)
             }
         }
     }

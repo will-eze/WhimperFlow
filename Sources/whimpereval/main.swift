@@ -31,6 +31,12 @@ struct Options {
     /// `{"clip": name, "text": raw}` lines (e.g. Parakeet output from the server
     /// bench). The text still goes through `TranscriptProcessor`.
     var hypotheses: URL?
+    /// Write each clip's raw text here as `{"clip","text"}` JSONL, ready for
+    /// `--hypotheses` (e.g. to score a post-correction step offline).
+    var dumpFile: URL?
+    /// `--correct`: run each server chunk through the misheard-word fixer, as
+    /// the app does, with the vocabulary from the settings in use.
+    var correct = false
     /// `apple` (default) or `server`: send each clip to the dictation server the
     /// way the app does (16 kHz mono, cut at pauses) and score what comes back.
     var backend = "apple"
@@ -85,6 +91,12 @@ func parseOptions() -> Options {
             if arg == "--chunk-min" { options.chunking.minSeconds = seconds } else { options.chunking.maxSeconds = seconds }
         case "--no-lm":
             options.useCustomLanguageModel = false
+        case "--correct":
+            options.correct = true
+        case "--dump":
+            guard let value = args.first else { fail("--dump needs a file path") }
+            args.removeFirst()
+            options.dumpFile = URL(fileURLWithPath: value)
         case "--verbose", "-v":
             options.verbose = true
         case "--help", "-h":
@@ -98,6 +110,8 @@ func parseOptions() -> Options {
               --streaming            replay clips through the buffer API the app
                                      uses, rather than the file-based API
               --no-lm                skip the custom language model (measures its effect)
+              --correct              (server) also run the misheard-word fixer per chunk
+              --dump <jsonl>         append each clip's raw text as {"clip","text"}
               --hypotheses <jsonl>   score pre-recognised text ({"clip","text"} per
                                      line) through the pipeline; no recogniser runs
               --backend server       recognise on the dictation server, chunked as
@@ -653,7 +667,8 @@ func loadHypotheses(_ url: URL) -> [String: String] {
 /// The app's server path, minus the microphone: 16 kHz mono, fed to the chunk
 /// planner in 0.1 s buffers, every chunk but the last sent "while talking", and
 /// the last one timed. That last round trip is the wait after letting go.
-func recognizeOnServer(audio: URL, client: DictationServerClient, chunking: ChunkPlanner.Config)
+func recognizeOnServer(audio: URL, client: DictationServerClient, chunking: ChunkPlanner.Config,
+                       vocabulary: [String] = [])
     async throws -> (text: String, afterRelease: Double, chunks: Int) {
     let samples = try MonoResampler.samples(of: audio)
     var planner = ChunkPlanner(config: chunking)
@@ -670,9 +685,12 @@ func recognizeOnServer(audio: URL, client: DictationServerClient, chunking: Chun
     for (index, chunk) in chunks.enumerated() where chunk.hasSpeech {
         let wav = WAVEncoder.encode(samples[chunk.start..<chunk.end])
         let started = Date()
-        let result = try await client.transcribe(wav: wav, timeout: 30)
+        var text = try await client.transcribe(wav: wav, timeout: 30).text
+        if !vocabulary.isEmpty, !text.isEmpty {
+            text = try await client.correct(text, vocabulary: vocabulary, timeout: 30).text
+        }
         if index == chunks.count - 1 { wait = Date().timeIntervalSince(started) }
-        parts.append(result.text)
+        parts.append(text)
     }
     return (ChunkJoiner.join(parts), wait, chunks.count)
 }
@@ -711,6 +729,16 @@ guard !clips.isEmpty else {
 
 let settingsDirectory = options.settingsDirectory
 let settings = await MainActor.run { SettingsStore(directory: settingsDirectory).settings }
+/// What the app would send the fixer: the saved terms, or (before the app has
+/// filled them in) the same list mined from History.
+let fixerVocabulary: [String] = await MainActor.run {
+    guard options.correct else { return [] }
+    var vocab = settings
+    if vocab.terms == nil {
+        vocab.terms = TermMiner.initialTerms(from: HistoryStore(directory: settingsDirectory).records.map(\.processedText))
+    }
+    return vocab.correctionVocabulary
+}
 let localeIdentifier = options.localeOverride ?? settings.localeIdentifier
 let locale = Locale(identifier: localeIdentifier)
 
@@ -853,7 +881,8 @@ for clip in clips {
             guard let text = hypotheses[clip.name] else { throw EvalError.noHypothesis }
             raw = text
         } else if let serverClient {
-            let result = try await recognizeOnServer(audio: clip.audio, client: serverClient, chunking: options.chunking)
+            let result = try await recognizeOnServer(audio: clip.audio, client: serverClient, chunking: options.chunking,
+                                                     vocabulary: fixerVocabulary)
             raw = result.text
             afterRelease.append(result.afterRelease)
             chunkCounts.append(result.chunks)
@@ -883,6 +912,14 @@ for clip in clips {
             }
         }
         let processed = processor.process(raw).text
+        if let dump = options.dumpFile {
+            let line = try JSONSerialization.data(withJSONObject: ["clip": clip.name, "text": raw]) + Data("\n".utf8)
+            if let handle = try? FileHandle(forWritingTo: dump) {
+                handle.seekToEndOfFile(); handle.write(line); try? handle.close()
+            } else {
+                try line.write(to: dump)
+            }
+        }
 
         let rawScore = WordErrorRate.score(reference: clip.reference, hypothesis: raw)
         let processedScore = WordErrorRate.score(reference: clip.reference, hypothesis: processed)

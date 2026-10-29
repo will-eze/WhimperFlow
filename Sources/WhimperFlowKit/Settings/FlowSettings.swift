@@ -193,6 +193,13 @@ public struct FlowSettings: Codable, Equatable, Sendable {
     /// The dictation server (Parakeet on the Jarvis server, over Tailscale).
     /// Optional for back-compat; nil/blank falls back to the default.
     public var serverURL: String?
+    /// Let the server's small model swap misheard words for known terms
+    /// ("public reaper" → "public repo"). Optional for back-compat; nil means on.
+    public var fixMishears: Bool?
+    /// Terms the user says that a recogniser may mishear (repo, GitHub, k8s).
+    /// With the dictionary's spellings, these are the only words the fixer may
+    /// write. nil = never set up (the app fills it once from history).
+    public var terms: [String]?
 
     // Output
     public var injectionMethod: InjectionMethod
@@ -317,6 +324,22 @@ public struct FlowSettings: Codable, Equatable, Sendable {
         let text = (serverURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if let url = URL(string: text), url.scheme != nil, url.host != nil { return url }
         return URL(string: FlowSettings.defaultServerURL)!
+    }
+
+    /// Effective misheard-word fixing state (`nil` decodes as on).
+    public var fixMishearsEnabled: Bool {
+        get { fixMishears ?? true }
+        set { fixMishears = newValue }
+    }
+
+    /// Everything the fixer may write: the user's terms, then the dictionary's
+    /// spellings, without repeats and capped at 200.
+    public var correctionVocabulary: [String] {
+        var seen = Set<String>()
+        let all = (terms ?? []) + dictionary.map(\.replacement)
+        return Array(all.map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
+            .prefix(200))
     }
 
     /// Effective voice-functions state (`nil` decodes as enabled).

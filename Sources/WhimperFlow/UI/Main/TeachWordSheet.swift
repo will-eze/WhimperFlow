@@ -173,10 +173,17 @@ struct WordFlow: Layout {
     var lineSpacing: CGFloat
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let rows = arrange(width: proposal.width ?? .infinity, subviews: subviews)
+        // A zero or missing width is a minimum/ideal-size query: answer with one
+        // row, or every word gets its own line and the window grows to fit.
+        // Size queries (zero, missing or infinite width) get the narrowest
+        // honest answer, one item per row, so this never forces its window
+        // wider than one word. Real layouts wrap to the width offered.
+        let proposed = proposal.width ?? 0
+        let available = proposed > 0 && proposed.isFinite ? proposed : 0
+        let rows = arrange(width: available, subviews: subviews)
         let width = rows.map(\.width).max() ?? 0
         let height = rows.map(\.height).reduce(0, +) + lineSpacing * CGFloat(max(rows.count - 1, 0))
-        return CGSize(width: proposal.width ?? width, height: height)
+        return CGSize(width: proposed > 0 && proposed.isFinite ? proposed : width, height: height)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {

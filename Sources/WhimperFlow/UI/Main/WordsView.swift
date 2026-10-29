@@ -27,7 +27,6 @@ struct WordsView: View {
             VStack(alignment: .leading, spacing: 14) {
                 Text("Words it hears wrong, and how to write them. The quickest way to add one is Fix a word on a dictation in Home or History.")
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
                 addRow
             }
             .padding(.horizontal, 24)
@@ -36,6 +35,10 @@ struct WordsView: View {
 
             Divider()
             list
+            Divider()
+            TermsEditor(settingsStore: settingsStore)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 14)
         }
         .toolbar {
             ToolbarItem {
@@ -190,5 +193,60 @@ private struct WordRow: View {
             Divider()
             Button("Delete", role: .destructive, action: delete)
         }
+    }
+}
+
+/// The terms the misheard-word fixer may write, as removable chips.
+private struct TermsEditor: View {
+    @ObservedObject var settingsStore: SettingsStore
+    @State private var newTerm = ""
+
+    private var terms: [String] { settingsStore.settings.terms ?? [] }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Terms you use").font(.headline)
+                Spacer()
+                TextField("Add a term", text: $newTerm)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 180)
+                    .onSubmit(add)
+            }
+            Text("Jargon and names a recogniser might mishear. The AI fixer on Jarvis may swap a misheard word for one of these, or for a spelling above.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            ScrollView {
+                WordFlow(spacing: 6, lineSpacing: 6) {
+                    ForEach(terms, id: \.self) { term in
+                        HStack(spacing: 4) {
+                            Text(term)
+                            Button {
+                                settingsStore.settings.terms = terms.filter { $0 != term }
+                            } label: {
+                                Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Remove")
+                        }
+                        .font(.callout)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color.primary.opacity(0.07), in: Capsule())
+                    }
+                }
+            }
+            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 84, maxHeight: 84)
+        }
+    }
+
+    private func add() {
+        let term = newTerm.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !term.isEmpty, !terms.contains(where: { $0.caseInsensitiveCompare(term) == .orderedSame }) else {
+            newTerm = ""
+            return
+        }
+        settingsStore.settings.terms = [term] + terms
+        newTerm = ""
     }
 }

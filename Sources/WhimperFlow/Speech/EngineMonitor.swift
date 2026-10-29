@@ -18,6 +18,8 @@ final class EngineMonitor: ObservableObject {
     @Published private(set) var status: Status = .none
     @Published private(set) var serverModel: String?
     @Published private(set) var serverReachable = false
+    /// The server's misheard-word fixer is loaded.
+    @Published private(set) var serverCorrector = false
 
     /// Fired when the server comes back after being unreachable.
     var onServerBack: (() -> Void)?
@@ -74,6 +76,7 @@ final class EngineMonitor: ObservableObject {
             let wasReachable = self.serverReachable
             self.serverReachable = health != nil
             self.serverModel = health?.model
+            self.serverCorrector = health?.corrector ?? false
             self.recompute()
             if health != nil, !wasReachable { self.onServerBack?() }
         }

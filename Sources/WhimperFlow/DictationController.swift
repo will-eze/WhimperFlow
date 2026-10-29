@@ -23,6 +23,8 @@ final class DictationController: ObservableObject {
     @Published private(set) var partialTranscript = ""
     /// The Apple fallback produced some of the current (or last) dictation's text.
     @Published private(set) var usedFallback = false
+    /// Words the server's fixer swapped in this dictation ("reaper" → "repo").
+    @Published private(set) var sessionFixes: [DictationServerClient.Fix] = []
 
     private let settingsStore: SettingsStore
     private let historyStore: HistoryStore
@@ -215,6 +217,7 @@ final class DictationController: ObservableObject {
 
         partialTranscript = ""
         usedFallback = false
+        sessionFixes = []
         activeEngine = engine
         sessionStart = Date()
         lastVoiceActivity = Date()
@@ -231,7 +234,14 @@ final class DictationController: ObservableObject {
                     addsPunctuation: settings.autoPunctuate
                 )
                 // Server known down: don't make every chunk wait out a timeout.
-                let primary = engineMonitor.serverReachable ? ServerBackend(client: engineMonitor.client) : nil
+                let primary = engineMonitor.serverReachable
+                    ? ServerBackend(
+                        client: engineMonitor.client,
+                        vocabulary: settings.fixMishearsEnabled ? settings.correctionVocabulary : [],
+                        onFixes: { [weak self] fixes in
+                            Task { @MainActor in self?.sessionFixes += fixes }
+                        })
+                    : nil
                 chunked.start(primary: primary, fallback: fallback)
                 engineMonitor.check() // warms the connection while the user talks
             case .apple:
@@ -306,14 +316,20 @@ final class DictationController: ObservableObject {
                 return
             }
         }
-        handleFinalTranscript(outcome.text)
+        // History keeps what was heard, so "What it heard" shows the mishear
+        // the fixer corrected.
+        var heard = outcome.text
+        for fix in sessionFixes {
+            if let range = heard.range(of: fix.written) { heard.replaceSubrange(range, with: fix.heard) }
+        }
+        handleFinalTranscript(outcome.text, heard: heard)
     }
 
     private func retryUnsent() {
         unsent.retry(client: engineMonitor.client, settings: settingsStore.settings, history: historyStore)
     }
 
-    private func handleFinalTranscript(_ raw: String) {
+    private func handleFinalTranscript(_ raw: String, heard: String? = nil) {
         defer {
             partialTranscript = ""
             audioLevel = 0
@@ -354,7 +370,7 @@ final class DictationController: ObservableObject {
                 date: Date(),
                 appBundleID: bundleID,
                 appName: targetApp?.localizedName,
-                rawText: trimmed,
+                rawText: heard?.trimmingCharacters(in: .whitespacesAndNewlines) ?? trimmed,
                 processedText: result.text.trimmingCharacters(in: .whitespaces),
                 durationSeconds: duration
             ))

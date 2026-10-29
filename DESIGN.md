@@ -194,3 +194,16 @@ in the Dock: Will, 2026-10-29) replaces the separate Settings and History window
   **Settings**: General / Engine / Permissions / About.
 - The app now installs a main menu (Edit menu), without which ⌘C/⌘V/⌘A never worked in its text fields.
 - `WhimperFlow --snapshot <dir> [--appearance dark|light]` renders every page to PNG for layout checks.
+
+## Misheard-word fixer and spoken shortcuts (2026-10-29)
+
+- **Fixer**: after each server chunk, `POST /correct {text, vocab}`. Qwen2.5 1.5B on the Jarvis server proposes a
+  corrected sentence; the server keeps only swaps of ≤3 words into the vocabulary (`FlowSettings.correctionVocabulary`
+  = Words → Terms you use + the dictionary's spellings), so it can't reword anything. Timeout 1.5 s + 0.06 s/word;
+  slow or failing leaves the chunk as heard. The pop-up shows "reaper → repo" for 1.8 s; History keeps the heard text.
+  Terms start from `TermMiner.starter` + jargon mined from History. Eval (34 clips, chunked, over Tailscale):
+  5.4 → 5.3% processed WER, raw 6.7 → 5.3%, no wrong changes; p90 wait after release 0.47 → 0.96 s.
+  `whimpereval --backend server --correct` measures it. Off switch: Settings → Engine.
+- **Spoken shortcuts** (`SpokenShortcuts`): "quote unquote X" / "quote on quote X" quote X to the next punctuation;
+  "quote X unquote|end quote" quote X; 3+ single letters join (Parakeet already joins them itself).
+- **⌃⌥V** types the last dictation again (Carbon hotkey, waits for the modifiers to come up).

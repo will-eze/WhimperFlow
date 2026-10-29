@@ -12,15 +12,33 @@ protocol TranscriptionBackend: AnyObject, Sendable {
 /// the server can't answer quickly goes to the Apple fallback instead.
 final class ServerBackend: TranscriptionBackend, @unchecked Sendable {
     let client: DictationServerClient
+    /// Terms the misheard-word fixer may write; empty turns fixing off.
+    private let vocabulary: [String]
+    /// Called on the main queue with each chunk's fixes.
+    private let onFixes: @Sendable ([DictationServerClient.Fix]) -> Void
 
-    init(client: DictationServerClient) {
+    init(client: DictationServerClient, vocabulary: [String] = [],
+         onFixes: @escaping @Sendable ([DictationServerClient.Fix]) -> Void = { _ in }) {
         self.client = client
+        self.vocabulary = vocabulary
+        self.onFixes = onFixes
     }
 
     func transcribe(_ samples: [Float]) async throws -> String {
         let seconds = Double(samples.count) / MonoResampler.outputRate
         let wav = WAVEncoder.encode(samples[...])
-        return try await client.transcribe(wav: wav, timeout: 2 + 0.1 * seconds).text
+        let text = try await client.transcribe(wav: wav, timeout: 2 + 0.1 * seconds).text
+        guard !vocabulary.isEmpty, !text.isEmpty else { return text }
+        // The fixer is optional: slow or failing, the chunk keeps what was heard.
+        let words = Double(text.split(separator: " ").count)
+        guard let fixed = try? await client.correct(text, vocabulary: vocabulary, timeout: 1.5 + 0.06 * words) else {
+            return text
+        }
+        if !fixed.fixes.isEmpty {
+            let fixes = fixed.fixes
+            DispatchQueue.main.async { [onFixes] in onFixes(fixes) }
+        }
+        return fixed.text
     }
 }
 

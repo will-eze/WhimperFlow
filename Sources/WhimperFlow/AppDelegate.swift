@@ -31,6 +31,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settingsStore.settings.launchAtLoginDefaultApplied = true
         }
         historyStore = HistoryStore()
+        // First run of the misheard-word fixer: start its term list from the
+        // jargon already in History. From then on the list is the user's.
+        if settingsStore.settings.terms == nil {
+            settingsStore.settings.terms = TermMiner.initialTerms(from: historyStore.records.map(\.processedText))
+        }
         permissions = PermissionsManager()
         permissions.beginPolling()
 
@@ -143,9 +148,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 case .listening, .processing, .error:
                     self.hudPanel.show()
                 case .idle:
-                    // After an Apple-fallback dictation, leave the HUD up a
-                    // moment so its marker can be seen.
-                    let linger = self.hudModel.usedFallback ? 1.5 : 0
+                    // After an Apple-fallback dictation or a fixed word, leave
+                    // the HUD up a moment so it can be read.
+                    let linger = self.hudModel.usedFallback || !self.hudModel.fixes.isEmpty ? 1.8 : 0
                     DispatchQueue.main.asyncAfter(deadline: .now() + linger) {
                         guard self.hudModel.state == .idle else { return }
                         self.hudModel.reset()
@@ -158,6 +163,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.$audioLevel
             .receive(on: DispatchQueue.main)
             .sink { [weak self] level in self?.hudModel.pushLevel(level) }
+            .store(in: &cancellables)
+
+        controller.$sessionFixes
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] fixes in self?.hudModel.fixes = fixes }
             .store(in: &cancellables)
 
         controller.$usedFallback

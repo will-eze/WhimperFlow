@@ -38,6 +38,8 @@ public final class DictationServerClient: @unchecked Sendable {
 
     public struct Health: Equatable, Sendable {
         public var model: String
+        /// The misheard-word fixer is loaded.
+        public var corrector: Bool
     }
 
     public enum ClientError: LocalizedError {
@@ -78,6 +80,31 @@ public final class DictationServerClient: @unchecked Sendable {
         return Transcript(text: text, serverMs: object["ms"] as? Int ?? 0)
     }
 
+    /// A misheard-word fix: what was heard and what was written instead.
+    public struct Fix: Equatable, Sendable {
+        public var heard: String
+        public var written: String
+    }
+
+    /// Asks the server's small model to swap misheard words for `vocabulary`
+    /// terms ("public reaper" → "public repo"). Only swaps into vocabulary come
+    /// back; the server never rewords anything else.
+    public func correct(_ text: String, vocabulary: [String], timeout: TimeInterval) async throws -> (text: String, fixes: [Fix]) {
+        var request = URLRequest(url: baseURL.appendingPathComponent("correct"), timeoutInterval: timeout)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["text": text, "vocab": vocabulary])
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw ClientError.badResponse }
+        guard http.statusCode == 200 else { throw ClientError.badStatus(http.statusCode) }
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let fixed = object["text"] as? String else { throw ClientError.badResponse }
+        let fixes = (object["fixes"] as? [[String]] ?? []).compactMap { pair in
+            pair.count == 2 ? Fix(heard: pair[0], written: pair[1]) : nil
+        }
+        return (fixed, fixes)
+    }
+
     /// `nil` when the server can't be reached or isn't ready. Also warms the
     /// connection, which is why the app calls it when a dictation starts.
     public func health(timeout: TimeInterval = 3) async -> Health? {
@@ -86,7 +113,7 @@ public final class DictationServerClient: @unchecked Sendable {
               (response as? HTTPURLResponse)?.statusCode == 200,
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               object["ok"] as? Bool == true else { return nil }
-        return Health(model: object["model"] as? String ?? "?")
+        return Health(model: object["model"] as? String ?? "?", corrector: object["corrector"] as? Bool ?? false)
     }
 }
 
