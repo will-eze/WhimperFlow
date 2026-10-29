@@ -21,12 +21,19 @@ final class DictationController: ObservableObject {
     @Published private(set) var state: DictationState = .idle
     @Published private(set) var audioLevel: Float = 0
     @Published private(set) var partialTranscript = ""
+    /// The Apple fallback produced some of the current (or last) dictation's text.
+    @Published private(set) var usedFallback = false
 
     private let settingsStore: SettingsStore
     private let historyStore: HistoryStore
     private let permissions: PermissionsManager
     private let audio = AudioCaptureEngine()
     private let speech = SpeechService()
+    private let chunked = ChunkedDictation()
+    private let engineMonitor: EngineMonitor
+    private let unsent = UnsentRecordings()
+    /// The engine the running dictation uses (fixed at its start).
+    private var activeEngine: TranscriptionEngine = .server
     private let customLM = CustomLanguageModelStore()
     private let injector = TextInjector()
     private let sounds = SoundCues()
@@ -52,13 +59,19 @@ final class DictationController: ObservableObject {
     /// Below the hold threshold a key press is a "tap" (toggles hands-free).
     private let tapThreshold: TimeInterval = 0.35
 
-    init(settingsStore: SettingsStore, historyStore: HistoryStore, permissions: PermissionsManager) {
+    init(settingsStore: SettingsStore, historyStore: HistoryStore, permissions: PermissionsManager,
+         engineMonitor: EngineMonitor) {
         self.settingsStore = settingsStore
         self.historyStore = historyStore
         self.permissions = permissions
+        self.engineMonitor = engineMonitor
 
-        audio.onBuffer = { [weak self] buffer in
-            self?.speech.append(buffer: buffer)
+        // Audio thread: the buffer goes to whichever engine this dictation uses.
+        // Both ignore buffers when they aren't running.
+        let speech = speech, chunked = chunked
+        audio.onBuffer = { buffer in
+            speech.append(buffer: buffer)
+            chunked.append(buffer: buffer)
         }
         audio.onLevel = { [weak self] level in
             guard let self else { return }
@@ -72,6 +85,23 @@ final class DictationController: ObservableObject {
         speech.onFinal = { [weak self] text in
             self?.handleFinalTranscript(text)
         }
+        chunked.onPartial = { [weak self] text in
+            self?.partialTranscript = text
+        }
+        chunked.onFallback = { [weak self] in
+            self?.usedFallback = true
+        }
+        chunked.onServerFailure = { [weak self] in
+            self?.engineMonitor.noteServerFailure()
+        }
+        chunked.onFinal = { [weak self] outcome in
+            self?.handleChunkedOutcome(outcome)
+        }
+        // Also fires on the first successful check after launch.
+        engineMonitor.onServerBack = { [weak self] in
+            self?.retryUnsent()
+        }
+
         speech.onError = { [weak self] error in
             // A near-full disk crashes localspeechrecognitiond outright: it
             // preallocates a ~180 MB compiled-model cache under /var/folders
@@ -88,11 +118,13 @@ final class DictationController: ObservableObject {
         }
 
         // Keep the custom language model in sync with the user's vocabulary
-        // (the store hashes and no-ops when nothing relevant changed).
-        customLM.rebuildIfNeeded(settings: settingsStore.settings)
+        // (the store hashes and no-ops when nothing relevant changed). Only the
+        // Apple-only engine uses it: the server path's fallback is file-based,
+        // which ignores custom models, so compiling one at launch would be waste.
         settingsStore.$settings
             .removeDuplicates()
             .sink { [weak self] settings in
+                guard settings.transcriptionEngine == .apple else { return }
                 self?.customLM.rebuildIfNeeded(settings: settings)
             }
             .store(in: &cancellables)
@@ -154,21 +186,26 @@ final class DictationController: ObservableObject {
         // Re-read rather than trusting the last snapshot: the user may have
         // granted (or revoked) since launch, and macOS never tells us.
         permissions.refresh()
+        let settings = settingsStore.settings
+        let engine = settings.transcriptionEngine
+        // The server engine needs only the microphone; Speech Recognition is for
+        // its fallback, which fails per chunk (keeping the audio) without it.
         let missing = [
             permissions.microphone == .granted ? nil : "Microphone",
-            permissions.speechRecognition == .granted ? nil : "Speech Recognition",
+            engine == .server || permissions.speechRecognition == .granted ? nil : "Speech Recognition",
         ].compactMap { $0 }
         guard missing.isEmpty else {
             fail("\(missing.joined(separator: " and ")) access isn't granted — open Settings › Permissions.")
             return
         }
-        let settings = settingsStore.settings
         targetApp = NSWorkspace.shared.frontmostApplication
         guard settings.isEnabled(forBundleID: targetApp?.bundleIdentifier) else {
             return // dictation disabled for this app
         }
 
         partialTranscript = ""
+        usedFallback = false
+        activeEngine = engine
         sessionStart = Date()
         lastVoiceActivity = Date()
         // Re-learn the room each dictation: the mic or the surroundings may
@@ -176,15 +213,29 @@ final class DictationController: ObservableObject {
         vad.reset()
 
         do {
-            try speech.start(config: .init(
-                localeIdentifier: settings.localeIdentifier,
-                contextualStrings: settings.contextualStrings(),
-                addsPunctuation: settings.autoPunctuate,
-                customLanguageModel: customLM.configuration
-            ))
+            switch engine {
+            case .server:
+                let fallback = AppleBackend(
+                    localeIdentifier: settings.localeIdentifier,
+                    contextualStrings: settings.contextualStrings(),
+                    addsPunctuation: settings.autoPunctuate
+                )
+                // Server known down: don't make every chunk wait out a timeout.
+                let primary = engineMonitor.serverReachable ? ServerBackend(client: engineMonitor.client) : nil
+                chunked.start(primary: primary, fallback: fallback)
+                engineMonitor.check() // warms the connection while the user talks
+            case .apple:
+                try speech.start(config: .init(
+                    localeIdentifier: settings.localeIdentifier,
+                    contextualStrings: settings.contextualStrings(),
+                    addsPunctuation: settings.autoPunctuate,
+                    customLanguageModel: customLM.configuration
+                ))
+            }
             try audio.start(deviceUID: settings.microphoneUID, voiceProcessing: settings.voiceProcessingEnabled)
         } catch {
             speech.cancel()
+            chunked.cancel()
             audio.stop()
             fail(error.localizedDescription)
             return
@@ -201,13 +252,17 @@ final class DictationController: ObservableObject {
         audio.stop()
         state = .processing
         if settingsStore.settings.playSounds { sounds.play(.end) }
-        speech.finish()
+        switch activeEngine {
+        case .server: chunked.finish()
+        case .apple: speech.finish()
+        }
     }
 
     func cancel() {
         stopSilenceWatchdog()
         audio.stop()
         speech.cancel()
+        chunked.cancel()
         partialTranscript = ""
         audioLevel = 0
         state = .idle
@@ -218,6 +273,7 @@ final class DictationController: ObservableObject {
         stopSilenceWatchdog()
         audio.stop()
         speech.cancel()
+        chunked.cancel()
         audioLevel = 0
         state = .error(message)
         sounds.play(.cancel)
@@ -227,6 +283,25 @@ final class DictationController: ObservableObject {
     }
 
     // MARK: - Result handling
+
+    /// The server engine's result. Whatever was recognised is typed; if any
+    /// chunk failed on both engines, the whole recording is also kept and
+    /// transcribed into History once the server is back.
+    private func handleChunkedOutcome(_ outcome: ChunkedDictation.Outcome) {
+        guard state == .processing else { return }
+        if outcome.failedChunks > 0 {
+            unsent.save(outcome.samples, appName: targetApp?.localizedName)
+            if outcome.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                fail("No engine could transcribe that. The recording is saved and will appear in History once the server is back.")
+                return
+            }
+        }
+        handleFinalTranscript(outcome.text)
+    }
+
+    private func retryUnsent() {
+        unsent.retry(client: engineMonitor.client, settings: settingsStore.settings, history: historyStore)
+    }
 
     private func handleFinalTranscript(_ raw: String) {
         defer {

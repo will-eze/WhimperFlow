@@ -30,16 +30,42 @@ Wispr Flow (wisprflow.ai) is a system-wide dictation utility whose defining trai
 Speech → text requires a recognition engine; there is no such thing as a high-accuracy
 model-free recognizer. Per the agreed architecture decision:
 
-- **Recognition**: macOS's built-in **on-device** Speech framework
-  (`SFSpeechRecognizer` with `requiresOnDeviceRecognition = true`). We ship no model,
-  send no audio anywhere; the OS engine is treated as a sensor, like the camera.
+- **Recognition** (since 2026-10-29, PARAKEET_PLAN.md): **Parakeet TDT 0.6B v2** on
+  Will's own Jarvis server, reached only over Tailscale (`jarvis-dictate`, 5.4% processed
+  WER vs Apple's 11.5% on the eval set). macOS's **on-device** Speech framework
+  (`requiresOnDeviceRecognition = true`) is the per-chunk fallback, or the only engine
+  when chosen in Settings. We ship no model and nothing goes to the cloud; both engines
+  are treated as sensors, like the camera.
 - **Everything WhimperFlow itself does is deterministic**: the entire
   transcript-processing pipeline is pure functions over strings driven by
   user-editable rule tables. No sampling, no randomness, no network. The unit-test
   suite pins the behavior.
 - Recognition *biasing* is also deterministic configuration: dictionary terms are fed
-  to the engine via `SFSpeechRecognitionRequest.contextualStrings` (Apple's supported
-  vocabulary-boost mechanism, ≤100 phrases).
+  to Apple's engine via `SFSpeechRecognitionRequest.contextualStrings` (≤100 phrases).
+  Parakeet gets none: its hotwords were measured useless-to-harmful (RESULTS.md,
+  2026-10-29), so its mis-hears are dictionary entries instead.
+
+### Engine (server path)
+
+```
+hotkey down → /health (warms TLS) · AudioCaptureEngine tap → ChunkedDictation
+  MonoResampler (AudioSupport): average channels, then 16 kHz mono; every sample kept
+  ChunkPlanner (Kit): cut once ≥ 4 s at the first 0.3 s pause, or at 8 s at the
+    quietest moment of the last 3 s; chunks with < 0.1 s of speech are never sent
+  each closed chunk → ServerBackend (WAV POST, 2 s + 0.1 s/s timeout)
+                      └ on failure → AppleBackend (SFSpeechURLRecognitionRequest on the
+                        chunk), and the rest of this dictation skips the server
+hotkey up → last chunk only → ChunkJoiner → TranscriptProcessor (once, so voice
+  functions can span chunks) → inject
+both engines fail a chunk → whatever was recognised is typed, the whole recording is
+  saved to Application Support/WhimperFlow/Unsent and transcribed into History when
+  the server is back
+```
+
+`EngineMonitor` drives the menu-bar dot (green server, amber Apple only, red none) from
+`/health` at launch, on wake, on network change, every 60 s and per dictation. The
+Apple-only engine is the old streaming `SpeechService` with live partials; the custom
+language model is compiled only for it (the file-based fallback ignores custom models).
 
 ## 3. Architecture
 
@@ -50,7 +76,8 @@ Two SwiftPM targets plus a test target. Kit is AppKit-free and 100% unit-testabl
 │ AppDelegate / StatusBarController      SettingsWindow (SwiftUI panes)      │
 │ HotkeyMonitor (CGEventTap)             HistoryWindow (SwiftUI)             │
 │ AudioCaptureEngine (AVAudioEngine)     HUDPanel (floating NSPanel)         │
-│ SpeechService (SFSpeechRecognizer)     PermissionsManager                  │
+│ ChunkedDictation → Server/AppleBackend EngineMonitor (menu-bar dot)        │
+│ SpeechService (Apple-only, streaming)  PermissionsManager                  │
 │ TextInjector (pasteboard / CGEvent)    SoundCues                           │
 │                 DictationController (orchestrator, state machine)          │
 └──────────────────────────────────┬─────────────────────────────────────────┘
@@ -142,5 +169,11 @@ first-run onboarding checklist.
 
 - Swift 6.1, SwiftPM only (no Xcode project), macOS 14+ deployment.
 - `make app` → release build → assembles `WhimperFlow.app` (Info.plist with usage
-  descriptions, `LSUIElement`) → ad-hoc codesign.
+  descriptions, `LSUIElement`, build number + date for Settings → About) → signs with the
+  stable `WhimperFlow Dev` identity (`make signing-identity` once).
+- `make install` → the above, quits the running copy, replaces
+  `/Applications/WhimperFlow.app`, relaunches. The app registers itself as a login item
+  (on by default since 1.1.0).
 - `make test` → unit tests. `make run` → build & launch.
+- `WhimperFlow.app/Contents/MacOS/WhimperFlow --selftest <clip> [--server <url>]` plays
+  a recording through the real server/fallback path and prints the result.

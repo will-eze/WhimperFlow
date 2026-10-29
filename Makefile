@@ -124,18 +124,26 @@ app: build
 	cp $(BUILD_DIR)/$(APP_NAME) $(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)
 	cp Resources/Info.plist $(APP_BUNDLE)/Contents/Info.plist
 	cp Resources/AppIcon.icns $(APP_BUNDLE)/Contents/Resources/AppIcon.icns
+	@# Build number = commit count, plus the date, so Settings → About names the build.
+	/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $$(git rev-list --count HEAD 2>/dev/null || echo 0)" $(APP_BUNDLE)/Contents/Info.plist
+	/usr/libexec/PlistBuddy -c "Add :WFBuildDate string $$(date '+%Y-%m-%d %H:%M')" $(APP_BUNDLE)/Contents/Info.plist
 	codesign --force --sign "$(CODESIGN_IDENTITY)" $(APP_BUNDLE)
 	@echo "Built $(APP_BUNDLE) — run 'make install' to replace the copy in /Applications."
 
-# Replace the /Applications copy with a freshly built bundle, so the app the
-# user launches (Spotlight/Dock) is always the latest build. Quits a running
-# instance first so the bundle swaps cleanly; relaunch it yourself afterwards.
-# Signature is unchanged (cert-backed "WhimperFlow Dev"), so TCC grants survive.
+# One command from source to the running app: release build, sign, quit the
+# running copy, replace /Applications/WhimperFlow.app, relaunch. The app
+# registers itself as a login item on launch (Settings → General can turn that
+# off). Signature is unchanged (cert-backed "WhimperFlow Dev"), so TCC grants
+# survive; with no identity recorded it stops rather than silently ad-hoc
+# signing, which would drop every permission.
 install: app
+	@if [ "$(CODESIGN_IDENTITY)" = "-" ]; then echo "No signing identity: run 'make signing-identity' first (ad-hoc builds lose permissions)."; exit 1; fi
 	@osascript -e 'quit app "$(APP_NAME)"' >/dev/null 2>&1 || killall $(APP_NAME) >/dev/null 2>&1 || true
+	@sleep 1
 	rm -rf /Applications/$(APP_BUNDLE)
 	cp -R $(APP_BUNDLE) /Applications/$(APP_BUNDLE)
-	@echo "Installed $(APP_BUNDLE) to /Applications — launch from Spotlight or: open -a $(APP_NAME)"
+	open /Applications/$(APP_BUNDLE)
+	@echo "Installed and launched /Applications/$(APP_BUNDLE) ($$(/usr/libexec/PlistBuddy -c 'Print :WFBuildDate' $(APP_BUNDLE)/Contents/Info.plist))."
 
 run: app
 	open $(APP_BUNDLE)

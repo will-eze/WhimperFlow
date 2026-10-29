@@ -9,7 +9,7 @@ let package = Package(
         .target(name: "AudioSupport"),
         .executableTarget(
             name: "WhimperFlow",
-            dependencies: ["WhimperFlowKit"],
+            dependencies: ["WhimperFlowKit", "AudioSupport"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .executableTarget(

@@ -146,6 +146,21 @@ public struct AppProfile: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
+public enum TranscriptionEngine: String, Codable, CaseIterable, Sendable {
+    /// Parakeet on the dictation server; Apple's on-device recogniser for any
+    /// chunk the server can't answer in time.
+    case server
+    /// Apple's on-device recogniser only (streaming, with live partials).
+    case apple
+
+    public var displayName: String {
+        switch self {
+        case .server: return "Server, with Apple fallback"
+        case .apple: return "Apple on-device only"
+        }
+    }
+}
+
 /// The complete, versioned user configuration. Everything the deterministic
 /// pipeline does is driven by this value.
 public struct FlowSettings: Codable, Equatable, Sendable {
@@ -172,6 +187,12 @@ public struct FlowSettings: Codable, Equatable, Sendable {
     public var voiceProcessing: Bool?
     /// BCP-47 locale for recognition, e.g. "en-US".
     public var localeIdentifier: String
+    /// Where speech becomes text. Optional so settings saved by older versions
+    /// still decode; nil means the dictation server with Apple as fallback.
+    public var engine: TranscriptionEngine?
+    /// The dictation server (Parakeet on the Jarvis server, over Tailscale).
+    /// Optional for back-compat; nil/blank falls back to the default.
+    public var serverURL: String?
 
     // Output
     public var injectionMethod: InjectionMethod
@@ -200,6 +221,9 @@ public struct FlowSettings: Codable, Equatable, Sendable {
     // App behavior
     public var playSounds: Bool
     public var launchAtLogin: Bool
+    /// Set once launch-at-login has been switched on for settings saved before
+    /// it became the default (2026-10-29), so turning it off later sticks.
+    public var launchAtLoginDefaultApplied: Bool?
     public var showHUD: Bool
     public var historyEnabled: Bool
     /// Words-per-minute assumed for the "time saved vs typing" statistic.
@@ -215,6 +239,8 @@ public struct FlowSettings: Codable, Equatable, Sendable {
         microphoneUID = nil
         voiceProcessing = nil
         localeIdentifier = "en-US"
+        engine = .server
+        serverURL = FlowSettings.defaultServerURL
         injectionMethod = .auto
         defaultMode = .normal
         removeFillers = true
@@ -229,7 +255,8 @@ public struct FlowSettings: Codable, Equatable, Sendable {
         snippets = []
         appProfiles = []
         playSounds = true
-        launchAtLogin = false
+        launchAtLogin = true
+        launchAtLoginDefaultApplied = true
         showHUD = true
         historyEnabled = true
         typingWPMBaseline = 45
@@ -275,6 +302,21 @@ public struct FlowSettings: Codable, Equatable, Sendable {
     public var voiceProcessingEnabled: Bool {
         get { voiceProcessing ?? false }
         set { voiceProcessing = newValue }
+    }
+
+    public static let defaultServerURL = "https://jarvis.tail06c3ca.ts.net:7443"
+
+    /// Effective engine (`nil` decodes as the server with Apple fallback).
+    public var transcriptionEngine: TranscriptionEngine {
+        get { engine ?? .server }
+        set { engine = newValue }
+    }
+
+    /// Effective server URL, defaulting when unset, blank or unparseable.
+    public var dictationServerURL: URL {
+        let text = (serverURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if let url = URL(string: text), url.scheme != nil, url.host != nil { return url }
+        return URL(string: FlowSettings.defaultServerURL)!
     }
 
     /// Effective voice-functions state (`nil` decodes as enabled).

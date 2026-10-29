@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var historyStore: HistoryStore!
     private var permissions: PermissionsManager!
     private var controller: DictationController!
+    private var engineMonitor: EngineMonitor!
     private var statusBar: StatusBarController!
     private var hotkey: HotkeyMonitor!
     private var hudModel: HUDModel!
@@ -22,21 +23,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
 
         settingsStore = SettingsStore()
+        // Launch at login became the default on 2026-10-29. Settings saved
+        // before then say false only because that was the old default; switch
+        // them on once, and from then on the toggle's value is the user's.
+        if settingsStore.settings.launchAtLoginDefaultApplied != true {
+            settingsStore.settings.launchAtLogin = true
+            settingsStore.settings.launchAtLoginDefaultApplied = true
+        }
         historyStore = HistoryStore()
         permissions = PermissionsManager()
         permissions.beginPolling()
 
+        engineMonitor = EngineMonitor(settingsStore: settingsStore)
         controller = DictationController(
             settingsStore: settingsStore,
             historyStore: historyStore,
-            permissions: permissions
+            permissions: permissions,
+            engineMonitor: engineMonitor
         )
 
         hudModel = HUDModel()
         hudPanel = HUDPanel(model: hudModel)
         wireHUD()
 
-        statusBar = StatusBarController(controller: controller, settingsStore: settingsStore)
+        statusBar = StatusBarController(controller: controller, settingsStore: settingsStore, engineMonitor: engineMonitor)
         statusBar.openSettings = { [weak self] in self?.showSettings() }
         statusBar.openHistory = { [weak self] in self?.showHistory() }
 
@@ -108,8 +118,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 case .listening, .processing, .error:
                     self.hudPanel.show()
                 case .idle:
-                    self.hudModel.reset()
-                    self.hudPanel.hide()
+                    // After an Apple-fallback dictation, leave the HUD up a
+                    // moment so its marker can be seen.
+                    let linger = self.hudModel.usedFallback ? 1.5 : 0
+                    DispatchQueue.main.asyncAfter(deadline: .now() + linger) {
+                        guard self.hudModel.state == .idle else { return }
+                        self.hudModel.reset()
+                        self.hudPanel.hide()
+                    }
                 }
             }
             .store(in: &cancellables)
@@ -117,6 +133,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.$audioLevel
             .receive(on: DispatchQueue.main)
             .sink { [weak self] level in self?.hudModel.pushLevel(level) }
+            .store(in: &cancellables)
+
+        controller.$usedFallback
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] used in self?.hudModel.usedFallback = used }
             .store(in: &cancellables)
 
         controller.$partialTranscript
@@ -145,7 +166,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if settingsWindow == nil {
             let root = SettingsRootView(
                 settingsStore: settingsStore,
-                permissions: permissions
+                permissions: permissions,
+                engineMonitor: engineMonitor
             )
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 820, height: 580),

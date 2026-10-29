@@ -8,6 +8,8 @@ final class HUDModel: ObservableObject {
     @Published var state: DictationState = .idle
     @Published var levels: [Float] = Array(repeating: 0, count: HUDModel.barCount)
     @Published var partialText = ""
+    /// Apple's on-device fallback produced some of this dictation's text.
+    @Published var usedFallback = false
 
     static let barCount = 27
 
@@ -19,6 +21,7 @@ final class HUDModel: ObservableObject {
     func reset() {
         levels = Array(repeating: 0, count: HUDModel.barCount)
         partialText = ""
+        usedFallback = false
     }
 }
 
@@ -103,6 +106,15 @@ struct HUDView: View {
                 statusDot
                 waveform
                 stateLabel
+                if model.usedFallback {
+                    Text("Apple")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.orange.opacity(0.15), in: Capsule())
+                        .help("The server didn't answer, so Apple's on-device recogniser typed this.")
+                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 9)
@@ -151,7 +163,7 @@ struct HUDView: View {
             case .error(let message):
                 Text(message).lineLimit(1)
             case .idle:
-                Text("")
+                Text(model.usedFallback ? "Typed via fallback" : "")
             }
         }
         .font(.system(size: 12, weight: .medium))

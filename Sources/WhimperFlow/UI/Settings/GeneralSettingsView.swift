@@ -4,7 +4,11 @@ import WhimperFlowKit
 /// Input hotkey, audio/language, output, and general app-behavior toggles.
 struct GeneralSettingsView: View {
     @ObservedObject var settingsStore: SettingsStore
+    @ObservedObject var engineMonitor: EngineMonitor
 
+    @State private var serverURLText = ""
+    @State private var testResult: String?
+    @State private var testing = false
     @State private var microphones: [AudioInputDevice] = AudioDevices.inputDevices()
     @State private var locales: [SpeechLocaleOption] = SpeechLocales.options()
 
@@ -52,6 +56,29 @@ struct GeneralSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Engine") {
+                Picker("Speech to text", selection: $settingsStore.settings.transcriptionEngine) {
+                    ForEach(TranscriptionEngine.allCases, id: \.self) { engine in
+                        Text(engine.displayName).tag(engine)
+                    }
+                }
+                if settingsStore.settings.transcriptionEngine == .server {
+                    HStack {
+                        TextField("Server", text: $serverURLText, prompt: Text(FlowSettings.defaultServerURL))
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit(commitServerURL)
+                        Button(testing ? "Testing…" : "Test connection", action: testConnection)
+                            .disabled(testing)
+                    }
+                    if let testResult {
+                        Text(testResult).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Text(engineCaption)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Audio & Language") {
                 Picker("Microphone", selection: $settingsStore.settings.microphoneUID) {
                     Text("System default").tag(String?.none)
@@ -93,7 +120,9 @@ struct GeneralSettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .onDisappear(perform: commitServerURL)
         .onAppear {
+            serverURLText = settingsStore.settings.serverURL ?? ""
             // Devices/locales can change while the window is open (e.g. a USB
             // mic plugged in); refresh whenever General becomes visible.
             microphones = AudioDevices.inputDevices()
@@ -119,6 +148,39 @@ struct GeneralSettingsView: View {
         default: action = "a system action"
         }
         return "Your 🌐 key is also set to “\(action)” system-wide. WhimperFlow intercepts fn while running, but for reliability set “Press 🌐 key to” → “Do Nothing” in Keyboard Settings."
+    }
+
+    private var engineCaption: String {
+        switch settingsStore.settings.transcriptionEngine {
+        case .server:
+            return "Parakeet on your Jarvis server, over Tailscale only. If a chunk gets no answer within about 2 s, Apple's on-device recogniser types it instead, and a recording no engine can read is kept and transcribed into History later."
+        case .apple:
+            return "Apple's on-device recogniser with live partial results. Needs the language's on-device model (System Settings → Keyboard → Dictation)."
+        }
+    }
+
+    private func commitServerURL() {
+        let text = serverURLText.trimmingCharacters(in: .whitespacesAndNewlines)
+        settingsStore.settings.serverURL = text.isEmpty ? nil : text
+    }
+
+    private func testConnection() {
+        commitServerURL()
+        testing = true
+        testResult = nil
+        let client = DictationServerClient(baseURL: settingsStore.settings.dictationServerURL)
+        Task { @MainActor in
+            let started = Date()
+            let health = await client.health(timeout: 5)
+            let ms = Int(Date().timeIntervalSince(started) * 1000)
+            testing = false
+            if let health {
+                testResult = "Connected to \(client.baseURL.host ?? "server"): \(health.model), \(ms) ms."
+            } else {
+                testResult = "Can't reach \(client.baseURL.absoluteString). Is Tailscale on, and is jarvis-dictate running?"
+            }
+            engineMonitor.check()
+        }
     }
 
     private var silenceLabel: String {

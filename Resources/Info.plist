@@ -19,7 +19,7 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>1.1.0</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
@@ -29,10 +29,16 @@
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSMicrophoneUsageDescription</key>
-    <string>WhimperFlow captures your voice to transcribe it into text, entirely on this Mac.</string>
+    <string>WhimperFlow captures your voice to transcribe it into text, on your own dictation server over Tailscale or on this Mac.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
-    <string>WhimperFlow uses macOS on-device speech recognition to turn your speech into text. Audio never leaves your Mac.</string>
+    <string>WhimperFlow uses macOS on-device speech recognition when your dictation server can't be reached. That audio never leaves your Mac.</string>
     <key>NSHumanReadableCopyright</key>
-    <string>Local, deterministic dictation. No cloud. No bundled AI models.</string>
+    <string>Deterministic dictation. No cloud. No bundled AI models.</string>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <!-- A dictation server tested through a local tunnel (http://127.0.0.1:…). -->
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
 </dict>
 </plist>

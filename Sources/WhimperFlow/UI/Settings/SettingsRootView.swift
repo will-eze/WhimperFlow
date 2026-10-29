@@ -39,6 +39,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
 struct SettingsRootView: View {
     @ObservedObject var settingsStore: SettingsStore
     @ObservedObject var permissions: PermissionsManager
+    let engineMonitor: EngineMonitor
     @State private var selection: SettingsSection = .general
 
     var body: some View {
@@ -61,7 +62,7 @@ struct SettingsRootView: View {
     @ViewBuilder
     private func detail(for section: SettingsSection) -> some View {
         switch section {
-        case .general: GeneralSettingsView(settingsStore: settingsStore)
+        case .general: GeneralSettingsView(settingsStore: settingsStore, engineMonitor: engineMonitor)
         case .formatting: FormattingSettingsView(settingsStore: settingsStore)
         case .functions: FunctionsSettingsView(settingsStore: settingsStore)
         case .dictionary: DictionarySettingsView(settingsStore: settingsStore)

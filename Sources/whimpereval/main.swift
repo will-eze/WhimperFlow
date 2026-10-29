@@ -27,6 +27,15 @@ struct Options {
     /// Append per-session streaming events here (session starts, rotations,
     /// isFinal arrivals with timing). For diagnosing why a clip truncates.
     var debugLog: URL?
+    /// Score pre-recognised text instead of running a recogniser: a JSONL file of
+    /// `{"clip": name, "text": raw}` lines (e.g. Parakeet output from the server
+    /// bench). The text still goes through `TranscriptProcessor`.
+    var hypotheses: URL?
+    /// `apple` (default) or `server`: send each clip to the dictation server the
+    /// way the app does (16 kHz mono, cut at pauses) and score what comes back.
+    var backend = "apple"
+    var serverURL: URL?
+    var chunking = ChunkPlanner.Config()
 }
 
 func parseOptions() -> Options {
@@ -58,6 +67,22 @@ func parseOptions() -> Options {
             guard let value = args.first else { fail("--debug-log needs a file path") }
             args.removeFirst()
             options.debugLog = URL(fileURLWithPath: value)
+        case "--hypotheses":
+            guard let value = args.first else { fail("--hypotheses needs a JSONL file") }
+            args.removeFirst()
+            options.hypotheses = URL(fileURLWithPath: value)
+        case "--backend":
+            guard let value = args.first, ["apple", "server"].contains(value) else { fail("--backend needs apple or server") }
+            args.removeFirst()
+            options.backend = value
+        case "--server":
+            guard let value = args.first, let url = URL(string: value) else { fail("--server needs a URL") }
+            args.removeFirst()
+            options.serverURL = url
+        case "--chunk-min", "--chunk-max":
+            guard let value = args.first, let seconds = Double(value), seconds > 0 else { fail("\(arg) needs seconds") }
+            args.removeFirst()
+            if arg == "--chunk-min" { options.chunking.minSeconds = seconds } else { options.chunking.maxSeconds = seconds }
         case "--no-lm":
             options.useCustomLanguageModel = false
         case "--verbose", "-v":
@@ -73,6 +98,13 @@ func parseOptions() -> Options {
               --streaming            replay clips through the buffer API the app
                                      uses, rather than the file-based API
               --no-lm                skip the custom language model (measures its effect)
+              --hypotheses <jsonl>   score pre-recognised text ({"clip","text"} per
+                                     line) through the pipeline; no recogniser runs
+              --backend server       recognise on the dictation server, chunked as
+                                     the app does; also reports the wait after release
+              --server <url>         server for --backend server (default: the URL
+                                     in settings.json)
+              --chunk-min/--chunk-max <s>  chunk cut limits for --backend server
               --verbose              print a word-level diff for every clip
               --out <file>           also write the report here (used when the
                                      tool runs from its app bundle, where stdout
@@ -596,6 +628,55 @@ func prepareLanguageModel(settings: FlowSettings, locale: Locale) async -> SFSpe
     return nil
 }
 
+// MARK: - Other text sources
+
+enum EvalError: LocalizedError {
+    case noHypothesis
+    var errorDescription: String? { "no hypothesis for this clip" }
+}
+
+var serverModel = "?"
+
+func loadHypotheses(_ url: URL) -> [String: String] {
+    guard let text = try? String(contentsOf: url, encoding: .utf8) else { fail("can't read \(url.path)") }
+    var out: [String: String] = [:]
+    for line in text.split(separator: "\n") where !line.trimmingCharacters(in: .whitespaces).isEmpty {
+        guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+              let clip = object["clip"] as? String, let hyp = object["text"] as? String else {
+            fail("bad hypotheses line: \(line.prefix(80))")
+        }
+        out[clip] = hyp
+    }
+    return out
+}
+
+/// The app's server path, minus the microphone: 16 kHz mono, fed to the chunk
+/// planner in 0.1 s buffers, every chunk but the last sent "while talking", and
+/// the last one timed. That last round trip is the wait after letting go.
+func recognizeOnServer(audio: URL, client: DictationServerClient, chunking: ChunkPlanner.Config)
+    async throws -> (text: String, afterRelease: Double, chunks: Int) {
+    let samples = try MonoResampler.samples(of: audio)
+    var planner = ChunkPlanner(config: chunking)
+    var chunks: [ChunkPlanner.Chunk] = []
+    var offset = 0
+    while offset < samples.count {
+        let end = min(samples.count, offset + 1600)
+        chunks += planner.append(Array(samples[offset..<end]))
+        offset = end
+    }
+    if let last = planner.finish() { chunks.append(last) }
+    var parts: [String] = []
+    var wait = 0.0
+    for (index, chunk) in chunks.enumerated() where chunk.hasSpeech {
+        let wav = WAVEncoder.encode(samples[chunk.start..<chunk.end])
+        let started = Date()
+        let result = try await client.transcribe(wav: wav, timeout: 30)
+        if index == chunks.count - 1 { wait = Date().timeIntervalSince(started) }
+        parts.append(result.text)
+    }
+    return (ChunkJoiner.join(parts), wait, chunks.count)
+}
+
 // MARK: - Report
 
 func percent(_ value: Double) -> String {
@@ -633,66 +714,93 @@ let settings = await MainActor.run { SettingsStore(directory: settingsDirectory)
 let localeIdentifier = options.localeOverride ?? settings.localeIdentifier
 let locale = Locale(identifier: localeIdentifier)
 
-let status = await requestAuthorization()
-guard status == .authorized else {
-    fail("""
-        speech recognition not authorized (status: \(status.rawValue)).
-        Grant the terminal app Speech Recognition access in
-        System Settings → Privacy & Security → Speech Recognition, then re-run.
-        """)
-}
+/// Text that skips the Apple recogniser: from a file, or from the server.
+let hypotheses: [String: String]? = options.hypotheses.map(loadHypotheses)
+let serverClient = options.backend == "server"
+    ? DictationServerClient(baseURL: options.serverURL ?? settings.dictationServerURL)
+    : nil
+let usesApple = hypotheses == nil && serverClient == nil
 
-guard let recognizer = SFSpeechRecognizer(locale: locale), recognizer.isAvailable else {
-    fail("no recognizer available for \(localeIdentifier)")
-}
-guard recognizer.supportsOnDeviceRecognition else {
-    fail("""
-        on-device recognition unavailable for \(localeIdentifier).
-        The Siri/dictation asset for this language isn't installed.
-        """)
-}
-
-// The buffer-based request returns kAFAssistantErrorDomain 1107 with zero
-// callbacks unless a live capture session is running in the same process — true
-// even inside a signed bundle. Stand a real engine up and discard what it hears.
+var recognizer: SFSpeechRecognizer?
+var languageModel: SFSpeechLanguageModel.Configuration?
 let captureEngine = AVAudioEngine()
-if options.streaming {
-    let granted: Bool
-    switch AVCaptureDevice.authorizationStatus(for: .audio) {
-    case .authorized:
-        granted = true
-    case .notDetermined:
-        granted = await withCheckedContinuation { continuation in
-            AVCaptureDevice.requestAccess(for: .audio) { continuation.resume(returning: $0) }
-        }
-    default:
-        granted = false
-    }
-    guard granted else {
+if usesApple {
+    let status = await requestAuthorization()
+    guard status == .authorized else {
         fail("""
-            streaming mode needs microphone access (the buffer-based recognition
-            request fails without a live capture session). Grant it in
-            System Settings → Privacy & Security → Microphone.
+            speech recognition not authorized (status: \(status.rawValue)).
+            Grant the terminal app Speech Recognition access in
+            System Settings → Privacy & Security → Speech Recognition, then re-run.
             """)
     }
-    let input = captureEngine.inputNode
-    input.installTap(onBus: 0, bufferSize: 4096, format: input.outputFormat(forBus: 0)) { _, _ in }
-    do {
-        try captureEngine.start()
-    } catch {
-        fail("streaming mode couldn't start a capture engine: \(error)")
-    }
-}
 
-let languageModel = options.useCustomLanguageModel
-    ? await prepareLanguageModel(settings: settings, locale: locale)
-    : nil
+    guard let appleRecognizer = SFSpeechRecognizer(locale: locale), appleRecognizer.isAvailable else {
+        fail("no recognizer available for \(localeIdentifier)")
+    }
+    guard appleRecognizer.supportsOnDeviceRecognition else {
+        fail("""
+            on-device recognition unavailable for \(localeIdentifier).
+            The Siri/dictation asset for this language isn't installed.
+            """)
+    }
+
+    // The buffer-based request returns kAFAssistantErrorDomain 1107 with zero
+    // callbacks unless a live capture session is running in the same process — true
+    // even inside a signed bundle. Stand a real engine up and discard what it hears.
+    if options.streaming {
+        let granted: Bool
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            granted = true
+        case .notDetermined:
+            granted = await withCheckedContinuation { continuation in
+                AVCaptureDevice.requestAccess(for: .audio) { continuation.resume(returning: $0) }
+            }
+        default:
+            granted = false
+        }
+        guard granted else {
+            fail("""
+                streaming mode needs microphone access (the buffer-based recognition
+                request fails without a live capture session). Grant it in
+                System Settings → Privacy & Security → Microphone.
+                """)
+        }
+        let input = captureEngine.inputNode
+        input.installTap(onBus: 0, bufferSize: 4096, format: input.outputFormat(forBus: 0)) { _, _ in }
+        do {
+            try captureEngine.start()
+        } catch {
+            fail("streaming mode couldn't start a capture engine: \(error)")
+        }
+    }
+
+    recognizer = appleRecognizer
+    languageModel = options.useCustomLanguageModel
+        ? await prepareLanguageModel(settings: settings, locale: locale)
+        : nil
+}
+if let serverClient {
+    guard let health = await serverClient.health(timeout: 10) else {
+        fail("dictation server not reachable at \(serverClient.baseURL)")
+    }
+    serverModel = health.model
+}
 
 let processor = TranscriptProcessor(settings: settings)
 
-emit("whimpereval — locale \(localeIdentifier), custom LM: \(languageModel == nil ? "off" : "on"), "
-     + "API: \(options.streaming ? "streaming (as the app)" : "file-based"), \(clips.count) clip(s)")
-if let clientIdentifier {
+if let hypotheses = options.hypotheses {
+    emit("whimpereval — hypotheses from \(hypotheses.lastPathComponent), \(clips.count) clip(s)")
+} else if let serverClient {
+    emit("whimpereval — dictation server \(serverClient.baseURL.absoluteString) (\(serverModel)), "
+         + "chunks \(options.chunking.minSeconds)–\(options.chunking.maxSeconds) s, \(clips.count) clip(s)")
+} else {
+    emit("whimpereval — locale \(localeIdentifier), custom LM: \(languageModel == nil ? "off" : "on"), "
+         + "API: \(options.streaming ? "streaming (as the app)" : "file-based"), \(clips.count) clip(s)")
+}
+if !usesApple {
+    // No recogniser identity matters here.
+} else if let clientIdentifier {
     emit("identity: \(clientIdentifier) — bundled, so the custom language model is really attached")
 } else {
     emit("identity: none (unbundled) — ⚠️ the custom language model is IGNORED by the")
@@ -712,6 +820,9 @@ var scoredClips = 0
 var diffs: [(String, String)] = []
 var failures: [(String, String)] = []
 var trimmed: [(String, Double)] = []
+var categoryScores: [String: WordErrorRate.Score] = [:]
+var afterRelease: [Double] = []
+var chunkCounts: [Int] = []
 
 // Trimmed copies live here for the run only; the recordings are never touched.
 let scratch = FileManager.default.temporaryDirectory
@@ -728,7 +839,7 @@ for clip in clips {
         // recognizer, which would score as 100% WER and look like an accuracy
         // problem. Trim the tail so we measure recognition, not that cliff.
         var audio = clip.audio
-        if let result = try? SilenceTrimmer.trimmedCopy(of: clip.audio, into: scratch) {
+        if usesApple, let result = try? SilenceTrimmer.trimmedCopy(of: clip.audio, into: scratch) {
             audio = result.url
             trimmed.append((clip.name, result.outcome.trimmedSeconds))
         }
@@ -738,7 +849,16 @@ for clip in clips {
         // retry rather than scoring the clip as a total miss.
         var raw = ""
         var attempt = 0
-        while true {
+        if let hypotheses {
+            guard let text = hypotheses[clip.name] else { throw EvalError.noHypothesis }
+            raw = text
+        } else if let serverClient {
+            let result = try await recognizeOnServer(audio: clip.audio, client: serverClient, chunking: options.chunking)
+            raw = result.text
+            afterRelease.append(result.afterRelease)
+            chunkCounts.append(result.chunks)
+        }
+        while usesApple, let recognizer {
             do {
                 raw = options.streaming
                     ? try await recognizeStreaming(
@@ -773,6 +893,8 @@ for clip in clips {
         if exact { exactMatches += 1 }
         scoredClips += 1
 
+        let category = clip.name.split(separator: "-").first.map(String.init) ?? clip.name
+        categoryScores[category, default: WordErrorRate.Score()] = categoryScores[category, default: WordErrorRate.Score()] + processedScore
         emit("| \(clip.name) | \(rawScore.referenceWords) | \(percent(rawScore.rate)) | \(percent(processedScore.rate)) | \(exact ? "✓" : "·") |")
         if options.verbose {
             diffs.append((clip.name, WordErrorRate.diff(reference: clip.reference, hypothesis: processed)))
@@ -788,6 +910,17 @@ emit("")
 emit("processed errors: \(processedTotal.substitutions) substitutions, "
      + "\(processedTotal.deletions) deletions, \(processedTotal.insertions) insertions")
 emit("exact matches: \(exactMatches)/\(scoredClips) — catches formatting WER normalization hides")
+emit("processed WER by category: " + categoryScores.keys.sorted().map {
+    "\($0) \(percent(categoryScores[$0]!.rate))"
+}.joined(separator: " · "))
+if !afterRelease.isEmpty {
+    let sorted = afterRelease.sorted()
+    let median = sorted[sorted.count / 2]
+    let p90 = sorted[min(sorted.count - 1, Int(Double(sorted.count) * 0.9))]
+    emit(String(format: "after release (last chunk, round trip from this Mac): median %.2f s, p90 %.2f s, max %.2f s",
+                median, p90, sorted.last!))
+    emit("chunks per clip: " + chunkCounts.map(String.init).joined(separator: " "))
+}
 
 if !trimmed.isEmpty {
     let detail = trimmed.map { "\($0.0) (\(String(format: "%.1f", $0.1))s)" }.joined(separator: ", ")
